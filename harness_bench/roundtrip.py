@@ -149,6 +149,17 @@ NEEDS_SOFFICE = "needs_soffice"
 HARNESS_MISSING = "harness_not_installed"
 REFERENCE_UNAVAILABLE = "reference_unavailable"
 INPUT_UNAVAILABLE = "input_unavailable"
+ARTIFACT = "reference_is_a_rendered_artifact"
+
+#: Formats a LibreOffice harness can actually carry through import and export.
+#: Anything else (a PDF someone asked for, a screenshot of a slide) is a
+#: rendered artifact: there is nothing to import, so a round trip would measure
+#: the pipeline rather than the harness.
+EDITABLE_SUFFIXES = {
+    ".docx", ".doc", ".odt", ".rtf",
+    ".xlsx", ".xls", ".ods", ".csv",
+    ".pptx", ".ppt", ".odp",
+}
 
 
 @dataclass
@@ -238,6 +249,20 @@ def _result_path(task: Task, materialized: MaterializedTask) -> pathlib.Path | N
     return None
 
 
+def _artifact_problem(task: Task) -> str:
+    """ARTIFACT when the reference is a rendered file, not an editable document."""
+
+    reference = _reference(task)
+    if reference is None or task.family != "libreoffice":
+        return ""
+    path = reference.get("path")
+    if isinstance(path, list):
+        path = path[0]
+    if path and pathlib.Path(str(path)).suffix.lower() not in EDITABLE_SUFFIXES:
+        return ARTIFACT
+    return ""
+
+
 def _stage_reference(
     config: BenchConfig,
     task: Task,
@@ -258,6 +283,10 @@ def _stage_reference(
         path = path[0]
     if not path:
         return None, NO_REFERENCE
+
+    suffix = pathlib.Path(str(path)).suffix.lower()
+    if task.family == "libreoffice" and suffix not in EDITABLE_SUFFIXES:
+        return None, ARTIFACT
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(fetch(str(path), config.download_cache), destination)
@@ -297,6 +326,10 @@ def baseline(
     if task.is_infeasible:
         return None, "infeasible", "an infeasible task has no reference file"
 
+    artifact = _artifact_problem(task)
+    if artifact:
+        return None, artifact, "the reference is a rendered artifact, not an editable document"
+
     work = (pathlib.Path(runs_root) / "_roundtrip" / task.id / "baseline").resolve()
     try:
         materialized = materialize(task, work / "work", config.download_cache)
@@ -323,6 +356,15 @@ def check_task(
 
     if task.is_infeasible:
         result.reason = "infeasible task, no reference to round trip"
+        return result
+
+    artifact = _artifact_problem(task)
+    if artifact:
+        result.status = artifact
+        result.reason = (
+            "the reference is a rendered artifact (PDF or image), not an editable "
+            "document, so it cannot be carried through the harness's import and export"
+        )
         return result
 
     work = (pathlib.Path(runs_root) / "_roundtrip" / task.id).resolve()
@@ -357,6 +399,11 @@ def check_task(
     if problem:
         result.reason = problem
         result.status = problem
+        if problem == ARTIFACT:
+            result.reason = (
+                "the reference is a rendered artifact (PDF or image), not an editable "
+                "document, so it cannot be carried through the harness's import and export"
+            )
         return result
 
     base_score, base_status, base_reason = _score(
@@ -453,6 +500,7 @@ def summarize(results: list[RoundTripResult]) -> dict[str, Any]:
     harness_missing = [r for r in results if r.status == HARNESS_MISSING]
     reference_unavailable = [r for r in results if r.status == REFERENCE_UNAVAILABLE]
     input_unavailable = [r for r in results if r.status == INPUT_UNAVAILABLE]
+    artifacts = [r for r in results if r.status == ARTIFACT]
     failed = [
         r
         for r in results
@@ -487,5 +535,7 @@ def summarize(results: list[RoundTripResult]) -> dict[str, Any]:
         "harness_missing": len(harness_missing),
         "reference_unavailable": len(reference_unavailable),
         "input_unavailable": len(input_unavailable),
+        "rendered_artifacts": len(artifacts),
+        "rendered_artifact_task_ids": [r.task_id for r in artifacts],
         "by_app": by_app,
     }

@@ -136,37 +136,39 @@ getter 是 `vm_file`、所有 `expected` getter ∈ {`cloud_file`, `rule`}。
 | 采用任务 | 133 |
 | 不可行（infeasible，无需往返） | 11 |
 | 无参考件 | 15 |
-| 可判定（baseline = 1.0） | 94 |
+| 参考件是渲染产物（PDF/图片，无法导入） | 3 |
+| 可判定且测到（baseline = 1.0） | 70 |
 | 不可判定（参考件不是不动点） | 13 |
-| 缺 soffice | 0 |
-| harness 未安装 | 0 |
-| 实际测到 / 通过 / 丢失 / 上限 | 由 `roundtrip` 汇总（见 `runs/roundtrip.json`） |
+| 参考件当天下载不到（网络，不进分母） | 21 |
+| 缺 soffice / harness 未安装 | 0 / 0 |
+| **往返后仍满分 / 丢失 / 上限** | **12 / 58 / 12÷70 = 17.1%** |
 
-按软件：
+按软件（`runs/roundtrip.json` 实测）：
 
-| 软件 | 采用任务 | 可判定 |
-| --- | --- | --- |
-| gimp | 20 | 2 |
-| libreoffice_calc | 45 | 43 |
-| libreoffice_writer | 23 | 7 |
-| libreoffice_impress | 45 | 42 |
-| 合计 | 133 | 94 |
+| 软件 | 采用任务 | 可判定 | 通过 | 丢失 |
+| --- | --- | --- | --- | --- |
+| gimp | 20 | 2 | 1 | 1 |
+| libreoffice_calc | 45 | 37 | 7 | 30 |
+| libreoffice_writer | 23 | 12 | 4 | 8 |
+| libreoffice_impress | 45 | 19 | 0 | 19 |
+| 合计 | 133 | 70 | 12 | 58 |
 
 **分母必须写在表下面**：133 个采用任务里，11 个是不可行任务（不存在正确答案，
-只需 agent 声明放弃），15 个没有参考件，13 个的参考件不是不动点，**真正能测 harness
-保真度的只有 94 个**。`needs_soffice` 与 `harness_not_installed` 都已经归零——LibreOffice
-和两个 harness 都装在 `tools/` 与本机 PATH 上了，之前那 111 条测不了的任务全部解锁。
+只需 agent 声明放弃），15 个没有参考件，13 个的参考件不是不动点，3 个的参考件是
+渲染产物（PDF/PNG，没有可编辑文档可导入），21 个的参考件当天因 Hugging Face 不可达
+而下载不到——**真正测到 harness 保真度的只有 70 个**，上限 17.1%。
+`needs_soffice` 与 `harness_not_installed` 都已经归零（LibreOffice 26.8.3 与两个
+harness 都就位），之前那 111 条测不了的任务全部解锁。
 这个上限是**接口能力**的上界，不是 agent 能力：它回答的是「如果 agent 完全照着标准答案
 做，这个接口能不能把事情做对」。
 
-初步信号（截至提交时的进度，正式数字以 `roundtrip` 汇总为准）：
+**注意 impress 的 0/19**：19 条可判定任务全部丢失，机制单一——harness 的
+impress 导入/导出模型只保留文本框，图形与组合全部丢失（实测 `0a211154` 的 gold
+`13_0_Gold.pptx` 6 页、每页 5–13 个 FREEFORM/AUTO_SHAPE/GROUP，导出后每页只剩
+1–2 个 TEXT_BOX）。这不是判分器噪声，是保真度缺陷。
 
-- gimp（20/20 跑完）：可判定 2 条，1 通过（`77b8ab4d`）、1 丢失（`2a729ded`），
-  上限 50%；其余 9 条 infeasible、7 条参考件非不动点、2 条无参考件。
-- calc（已跑 9/43）：可判定 8 条，2 通过（`01b269ae`、`1273e544`）、6 丢失
-  （`0326d92d`、`035f41ba`、`04d9aeaf`、`0a2e43bf`、`0cecd4f3`、`12382c62`），
-  另有 1 条参考件下载不到。
-- writer（7 条可判定）与 impress（42 条可判定）尚未开始，排在队尾。
+**三个分母之外的口径**：3 条渲染产物任务用 `rendered_artifacts` 单列，21 条网络失败
+用 `reference_unavailable` 单列；两者都**绝不进分母、也算不上 harness 的损失**。
 
 丢在哪已经逐条取证（三处都是 harness 导出侧的真实缺陷，不是判分器噪声）：
 

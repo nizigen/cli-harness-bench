@@ -253,6 +253,7 @@ def cmd_roundtrip(args: argparse.Namespace) -> int:
         ("harness missing", "harness_missing"),
         ("reference unavailable", "reference_unavailable"),
         ("input unavailable", "input_unavailable"),
+        ("rendered artifacts", "rendered_artifacts"),
         ("measure failed", "failed"),
     ):
         if summary[key]:

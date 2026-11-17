@@ -190,24 +190,35 @@ LibreOffice and both harnesses available locally.
 
 | Check | Outcome |
 | --- | --- |
-| `pytest tests -q` | 91 passed |
+| `pytest tests -q` | 95 passed |
 | `run --dry-run` (all 133 tasks) | 107 self-graded, 94 score 1.0, 13 fail, 21 not gradeable |
-| `roundtrip` (all 133 tasks) | in progress; partial tallies below. Writes `runs/roundtrip.json` when it finishes |
+| `roundtrip` (all 133 tasks) | finished; **70 measured, 12 survived, 58 lost, ceiling 17.1%**. See `runs/roundtrip.json` |
 | `doctor` | soffice, `cli-anything-libreoffice`, `cli-anything-gimp`, 10 graders — all found |
 
-Partial `roundtrip` tallies at the time of writing (the run is long: every task
-imports and re-exports through LibreOffice, ~1–2 min each):
+Ceiling-check tallies (every task imports and re-exports through LibreOffice,
+~1–2 min each), out of the 133 adopted tasks:
 
-| Family | Tasks done | measured | passed | lost | notes |
-| --- | --- | --- | --- | --- | --- |
-| gimp | 20 / 20 | 2 | 1 | 1 | 9 infeasible, 7 reference-not-fixed-point, 2 no reference |
-| libreoffice_calc | 9 / 43 | 8 | 2 | 6 | 1 reference unavailable (network) |
-| libreoffice_writer | 0 / 7 | — | — | — | queued |
-| libreoffice_impress | 0 / 42 | — | — | — | queued |
+| Family | decidable | survived | lost | not decidable | no reference | artifacts |
+| --- | --- | --- | --- | --- | --- | --- |
+| gimp | 2 | 1 | 1 | 7 | 2 | 0 |
+| libreoffice_calc | 37 | 7 | 30 | 1 | 0 | 2 |
+| libreoffice_writer | 12 | 4 | 8 | 1 | 0 | 1 |
+| libreoffice_impress | 19 | 0 | 19 | 4 | 13 | 0 |
+| **total** | **70** | **12** | **58** | **13** | **15** | **3** |
 
-Every Calc loss was traced to a concrete export defect, not to grader noise:
-charts dropped on export, `0.00%` number formats degraded to `General`, and
-formulas written as `=of:=B2-C2-…` so the recalculation yields `#VALUE!`. See
+Plus 11 infeasible tasks (nothing to round trip) and 21 tasks whose reference
+answer could not be downloaded (Hugging Face was unreachable) — the latter are
+`grader_unavailable` and never enter the denominator.
+
+Three references are rendered artifacts (two PDFs, one PNG): there is no
+editable document to import, so a round trip says nothing about the harness.
+They are counted as `rendered_artifacts`, not as losses.
+
+Every loss was traced to a concrete mechanism, not to grader noise: charts
+dropped on export, `0.00%` number formats degraded to `General`, formulas
+written as `=of:=B2-C2-…` so the recalculation yields `#VALUE!`; on impress the
+import/export model keeps only text boxes, so every shape and group is lost
+(6 slides with 5–13 shapes each come back as 1–2 text boxes). See
 `docs/report-template.md` §4.
 
 The 13 self-grading failures are the tasks whose reference file is not a fixed

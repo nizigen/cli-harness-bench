@@ -123,3 +123,59 @@ def test_environment_failures_are_not_mistaken_for_a_bad_reference():
     assert summary["input_unavailable"] == 1
     assert summary["not_decidable"] == 1
     assert summary["decidable"] == 0
+
+
+def test_a_rendered_pdf_reference_is_not_a_round_trip_candidate(
+    all_tasks, stage_offline, tmp_path
+):
+    """A PDF or a screenshot is a rendered artifact: there is nothing to import."""
+
+    from harness_bench.config import BenchConfig
+
+    task = next(t for t in all_tasks if t.id.startswith("aa3a8974"))
+    staged = stage_offline(task, tmp_path / "work")
+
+    destination, problem = roundtrip._stage_reference(BenchConfig.load(), task, staged)
+
+    assert destination is None
+    assert problem == roundtrip.ARTIFACT
+
+
+def test_an_editable_reference_is_staged(all_tasks, stage_offline, tmp_path):
+    from harness_bench.config import BenchConfig
+
+    task = next(t for t in all_tasks if t.id.startswith("0810415c"))
+    staged = stage_offline(task, tmp_path / "work")
+
+    destination, problem = roundtrip._stage_reference(BenchConfig.load(), task, staged)
+
+    assert problem == ""
+    assert destination is not None and destination.exists()
+
+
+def test_rendered_artifacts_are_counted_apart_from_harness_losses():
+    results = [
+        _result(task_id="a", status=roundtrip.ARTIFACT),
+        _result(task_id="b", decidable=True, baseline=1.0, score=1.0, passed=True),
+    ]
+
+    summary = roundtrip.summarize(results)
+
+    assert summary["rendered_artifacts"] == 1
+    assert summary["decidable"] == 1
+    assert summary["lost"] == 0
+
+
+def test_an_artifact_task_short_circuits_before_any_download(all_tasks, tmp_path):
+    """A task whose reference is a PDF is excluded before its inputs are fetched."""
+
+    from harness_bench.config import BenchConfig
+
+    task = next(t for t in all_tasks if t.id.startswith("4bcb1253"))
+
+    result = roundtrip.check_task(BenchConfig.load(), task, tmp_path)
+
+    assert result.status == roundtrip.ARTIFACT
+    assert result.applicable is False
+    assert result.decidable is False
+    assert not (tmp_path / "_roundtrip" / task.id).exists()
