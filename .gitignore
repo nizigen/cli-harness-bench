@@ -2,10 +2,11 @@
 .cache/
 
 # Run artifacts: every `run` writes a task sandbox here, and they are large.
-# `runs/roundtrip.json` is a small summary and is kept.
+# `roundtrip` also writes runs/roundtrip.json — treat that as generated output.
 runs/_dry/
 runs/_roundtrip/
 runs/*/*/
+runs/roundtrip.json
 
 # Scratch probes used while porting the grader; not part of the deliverable.
 _scratch/

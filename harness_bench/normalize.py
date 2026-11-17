@@ -140,12 +140,26 @@ def soffice_env(soffice: str | None) -> dict[str, str]:
     return env
 
 
+def shared_profile_root() -> pathlib.Path:
+    """Profile directory reused by every conversion this process starts.
+
+    LibreOffice builds a fresh profile from scratch when it cannot find one,
+    which costs about 19 s per launch on Windows versus about 7 s when the
+    profile already exists.  Conversions here run one at a time, so a single
+    shared profile is safe and roughly triples the throughput of a full run.
+    """
+
+    return REPO_ROOT / ".cache" / "soffice-profile"
+
+
 def _profile_dir(root: pathlib.Path) -> pathlib.Path:
 
     profile = root / "lo-profile"
     user = profile / "user"
     user.mkdir(parents=True, exist_ok=True)
-    (user / "registrymodifications.xcu").write_text(RECALC_PROFILE, encoding="utf-8")
+    xcu = user / "registrymodifications.xcu"
+    if not xcu.exists():
+        xcu.write_text(RECALC_PROFILE, encoding="utf-8")
     return profile
 
 
@@ -209,7 +223,7 @@ def recalculate(path: pathlib.Path, soffice: str, scratch: pathlib.Path) -> Norm
         return NormalizeResult(str(path), "skip", True, f"no filter for {suffix}")
 
     scratch.mkdir(parents=True, exist_ok=True)
-    profile = _profile_dir(scratch)
+    profile = _profile_dir(shared_profile_root())
     outdir = scratch / "out"
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -343,7 +357,7 @@ def run_convert_to_csv(
     local_outdir = pathlib.Path(rewrite_vm_path(outdir, workdir)) if outdir else workdir
     local_outdir.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
-    profile = _profile_dir(scratch)
+    profile = _profile_dir(shared_profile_root())
 
     rewritten = [
         soffice,
