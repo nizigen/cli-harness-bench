@@ -192,8 +192,23 @@ LibreOffice and both harnesses available locally.
 | --- | --- |
 | `pytest tests -q` | 91 passed |
 | `run --dry-run` (all 133 tasks) | 107 self-graded, 94 score 1.0, 13 fail, 21 not gradeable |
-| `roundtrip` (all 133 tasks) | see `runs/roundtrip.json` |
+| `roundtrip` (all 133 tasks) | in progress; partial tallies below. Writes `runs/roundtrip.json` when it finishes |
 | `doctor` | soffice, `cli-anything-libreoffice`, `cli-anything-gimp`, 10 graders — all found |
+
+Partial `roundtrip` tallies at the time of writing (the run is long: every task
+imports and re-exports through LibreOffice, ~1–2 min each):
+
+| Family | Tasks done | measured | passed | lost | notes |
+| --- | --- | --- | --- | --- | --- |
+| gimp | 20 / 20 | 2 | 1 | 1 | 9 infeasible, 7 reference-not-fixed-point, 2 no reference |
+| libreoffice_calc | 9 / 43 | 8 | 2 | 6 | 1 reference unavailable (network) |
+| libreoffice_writer | 0 / 7 | — | — | — | queued |
+| libreoffice_impress | 0 / 42 | — | — | — | queued |
+
+Every Calc loss was traced to a concrete export defect, not to grader noise:
+charts dropped on export, `0.00%` number formats degraded to `General`, and
+formulas written as `=of:=B2-C2-…` so the recalculation yields `#VALUE!`. See
+`docs/report-template.md` §4.
 
 The 13 self-grading failures are the tasks whose reference file is not a fixed
 point of its own grader (7 GIMP, 1 Writer, 5 Impress); they are explained one by
