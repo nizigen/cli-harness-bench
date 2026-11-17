@@ -1,0 +1,18 @@
+# Downloaded OSWorld inputs (re-fetchable, several hundred MB)
+.cache/
+
+# Run artifacts: every `run` writes a task sandbox here, and they are large.
+# `runs/roundtrip.json` is a small summary and is kept.
+runs/_dry/
+runs/_roundtrip/
+runs/*/*/
+
+# Scratch probes used while porting the grader; not part of the deliverable.
+_scratch/
+
+# Project-local software: the unpacked LibreOffice tree and the MSI it came from.
+tools/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
