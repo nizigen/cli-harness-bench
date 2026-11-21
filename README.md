@@ -232,6 +232,6 @@ could not be fetched. They are counted separately and never as harness losses.
 
 ## Licence and provenance
 
-`third_party/osworld/` is Apache-2.0, copied from
+The runner is MIT (`LICENSE`). `third_party/osworld/` is Apache-2.0, copied from
 [xlang-ai/OSWorld](https://github.com/xlang-ai/OSWorld) at `5123bfdbbc`; see
 `third_party/osworld/LICENSE`.
