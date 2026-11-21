@@ -16,9 +16,11 @@ split:
 model:
   # Any OpenAI-compatible chat endpoint. The GUI interface needs vision=true.
   base_url: "http://127.0.0.1:3425/v1"
-  model: ""
+  model: "auto/deepseek-v4.1-flash"
   api_key_env: "OPENAI_API_KEY"
-  vision: false
+  vision: true
+  # How many screenshots stay attached in the prompt; older ones are folded to text.
+  image_history: 2
   temperature: 0.0
   max_tokens: 4096
   timeout_s: 180
@@ -30,8 +32,8 @@ harness:
   skill_docs: {}
 
 gui:
-  # Windows-MCP over stdio, restricted to the tools the proposal allows.
-  command: ["uvx", "windows-mcp"]
+  # Windows-MCP over stdio. It needs Python 3.14, so uvx fetches that interpreter.
+  command: ["uvx", "--python", "3.14", "--from", "windows-mcp", "windows-mcp", "serve", "--transport", "stdio"]
   tools:
     - Screenshot
     - Snapshot
@@ -45,6 +47,15 @@ gui:
   start_timeout_s: 60
   idle_gate_s: 10
 
+owncli:
+  # Our own CLI-Anything harness, on our own tasks: same agent, same budget.
+  binary: "cli-anything-nizigen-blog"
+  # A minimal Hugo site is generated per run unless a template directory is given.
+  template: ""
+  hugo: "C:/Coding/tools/hugo/0.168.0/hugo.exe"
+  # Private config directory, so a run cannot touch the real blog repositories.
+  home: ""
+
 apps:
   # A project-local, unpacked LibreOffice (tools/), not a system install. Leave
   # empty to let the runner look on PATH and in Program Files.
@@ -52,12 +63,13 @@ apps:
   gimp: ""
 
 repeats:
-  # Harness and script run three times; GUI and hybrid occupy the desktop, so
-  # they run once and the asymmetry is reported.
+  # Harness, script and owncli run three times; GUI and hybrid occupy the
+  # desktop, so they run once and the asymmetry is reported.
   harness: 3
   script: 3
   gui: 1
   hybrid: 1
+  owncli: 3
 
 runs_dir: "runs"
 download_cache: ".cache/osworld"

@@ -234,3 +234,52 @@ def test_a_run_without_a_configured_model_refuses_to_start(materialized):
 
     with pytest.raises(RuntimeError, match="no model configured"):
         runner.run(materialized)
+
+
+class ScreenshotInterface(FakeInterface):
+    """A GUI-shaped interface: a screenshot call returns pixels."""
+
+    def call(self, name: str, arguments: dict) -> ToolOutcome:
+        self.calls.append((name, arguments))
+        if name == "Screenshot":
+            return ToolOutcome(content="captured", ok=True, images=[("image/png", b"\x89PNG")])
+        return ToolOutcome(content=f"ran {name}", ok=True)
+
+
+def test_a_screenshot_reaches_the_model_as_an_image_part(materialized):
+    interface = ScreenshotInterface()
+    client = FakeClient(
+        [
+            _message(tool_calls=[_call("1", "Screenshot", "{}")]),
+            _message(tool_calls=[_call("2", "finish", '{"status": "done"}')]),
+        ]
+    )
+
+    outcome = _runner(_config(), client, interface).run(materialized)
+
+    tool_entry = outcome.transcript[3]
+    assert isinstance(tool_entry["content"], list)
+    kinds = [part["type"] for part in tool_entry["content"]]
+    assert kinds == ["text", "image_url"]
+    url = tool_entry["content"][1]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    assert outcome.images_sent == 1
+
+
+def test_older_screenshots_are_dropped_from_what_is_resent(materialized):
+    """Only the most recent ``image_history`` screenshots stay in the prompt."""
+
+    interface = ScreenshotInterface()
+    script = [_message(tool_calls=[_call(str(i), "Screenshot", "{}")]) for i in range(1, 4)]
+    script.append(_message(tool_calls=[_call("9", "finish", '{"status": "done"}')]))
+    client = FakeClient(script)
+
+    outcome = _runner(_config(image_history=1), client, interface).run(materialized)
+
+    tool_entries = [entry for entry in outcome.transcript if entry["role"] == "tool"]
+    with_images = [entry for entry in tool_entries if isinstance(entry["content"], list)]
+    assert len(with_images) == 1
+    assert with_images[0]["content"][-1]["type"] == "image_url"
+    # The dropped ones keep their text, so the record still shows what happened.
+    assert tool_entries[0]["content"] == "captured"
+    assert outcome.images_sent == 3

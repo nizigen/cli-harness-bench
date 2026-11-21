@@ -8,6 +8,7 @@ inspection can tell an agent mistake from a harness defect.
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from dataclasses import dataclass, field
@@ -54,6 +55,7 @@ class AgentOutcome:
     completion_tokens: int = 0
     elapsed_s: float = 0.0
     stopped_reason: str = ""
+    images_sent: int = 0
     transcript: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -80,6 +82,7 @@ class AgentOutcome:
             "completion_tokens": self.completion_tokens,
             "elapsed_s": round(self.elapsed_s, 3),
             "stopped_reason": self.stopped_reason,
+            "images_sent": self.images_sent,
             "steps": [step.as_dict() for step in self.steps],
         }
 
@@ -99,16 +102,64 @@ class AgentRunner:
     # -- client ----------------------------------------------------------
     def _client(self):
         try:
+            import httpx
             from openai import OpenAI
         except ImportError as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(f"the openai package is required: {exc}")
 
         model = self.config.model
+        # The endpoint is usually a local gateway.  A machine-wide HTTP(S)_PROXY
+        # would otherwise be applied to it, and httpx fails to parse some of the
+        # proxy strings it finds (``InvalidURL: Invalid port``).  Keep the proxy
+        # for anything remote, but never route the configured base_url through it.
+        http_client = httpx.Client(trust_env=False, timeout=model.timeout_s)
         return OpenAI(
             base_url=model.base_url,
             api_key=model.resolved_api_key() or "not-needed",
             timeout=model.timeout_s,
+            http_client=http_client,
         )
+
+    # -- transcript ------------------------------------------------------
+    def _tool_content(self, text: str, images: list[tuple[str, bytes]]) -> Any:
+        """The ``content`` of a tool message: text alone, or text plus images.
+
+        A vision model can only react to a screenshot if it is attached as an
+        image part; sending the text "<image>" instead makes the GUI arm blind.
+        Older screenshots are dropped from the transcript after
+        ``model.image_history`` turns so the context does not grow without bound.
+        """
+
+        if not images:
+            return text
+        parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        for mime, raw in images:
+            encoded = base64.b64encode(raw).decode("ascii")
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{encoded}"},
+                }
+            )
+        return parts
+
+    def _prune_images(self, messages: list[dict[str, Any]]) -> None:
+        """Keep only the most recent screenshots in the transcript.
+
+        Every screenshot stays in ``transcript.json``; this only bounds what is
+        re-sent to the model, so a long GUI run does not grow its prompt without
+        limit.
+        """
+
+        keep = max(1, self.config.model.image_history)
+        with_images = [
+            entry
+            for entry in messages
+            if entry.get("role") == "tool" and isinstance(entry.get("content"), list)
+        ]
+        for entry in with_images[:-keep]:
+            texts = [part for part in entry["content"] if part.get("type") == "text"]
+            entry["content"] = texts[0]["text"] if len(texts) == 1 else texts
 
     # -- loop ------------------------------------------------------------
     def run(self, task: MaterializedTask) -> AgentOutcome:
@@ -137,6 +188,7 @@ class AgentRunner:
                 outcome.stopped_reason = "wall_clock_budget"
                 break
 
+            self._prune_images(messages)
             step = Step(index=len(outcome.steps))
             try:
                 response = client.chat.completions.create(
@@ -197,21 +249,30 @@ class AgentRunner:
                     result_text = f"arguments were not valid JSON: {exc}"
                     ok = False
                     arguments = {}
+                    images = []
                 else:
                     try:
                         result = self.interface.call(name, arguments)
                         result_text = result.content
                         ok = result.ok
+                        images = result.images
                     except ToolError as exc:
                         result_text = str(exc)
                         ok = False
+                        images = []
 
                 step.tool_calls.append(
                     {"name": name, "arguments": arguments, "ok": ok, "result": result_text[:2000]}
                 )
                 messages.append(
-                    {"role": "tool", "tool_call_id": call.id, "content": result_text}
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": self._tool_content(result_text, images),
+                    }
                 )
+                if images:
+                    outcome.images_sent += len(images)
 
                 if name == FINISH_TOOL:
                     outcome.status = str(arguments.get("status", "incomplete"))
@@ -223,6 +284,7 @@ class AgentRunner:
                 outcome.stopped_reason = "finished"
                 break
 
+        self._prune_images(messages)
         outcome.elapsed_s = time.monotonic() - started
         outcome.transcript = messages
         if not outcome.stopped_reason:

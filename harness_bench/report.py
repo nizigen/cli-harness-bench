@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
-INTERFACE_ORDER = ("gui", "harness", "script", "hybrid")
+INTERFACE_ORDER = ("gui", "harness", "script", "hybrid", "owncli")
 
 FAILURE_CLASSES = (
     "expressiveness",

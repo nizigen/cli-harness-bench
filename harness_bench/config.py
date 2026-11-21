@@ -63,6 +63,7 @@ class ModelConfig:
     api_key_env: str = "OPENAI_API_KEY"
     api_key: str = ""
     vision: bool = False
+    image_history: int = 2
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout_s: float = 180.0
@@ -79,6 +80,7 @@ class ModelConfig:
             api_key_env=str(raw.get("api_key_env", "OPENAI_API_KEY")),
             api_key=str(raw.get("api_key", "")),
             vision=bool(raw.get("vision", False)),
+            image_history=int(raw.get("image_history", 2)),
             temperature=float(raw.get("temperature", 0.0)),
             max_tokens=int(raw.get("max_tokens", 4096)),
             timeout_s=float(raw.get("timeout_s", 180.0)),
@@ -127,6 +129,22 @@ class GuiConfig:
     start_timeout_s: float = 60.0
     idle_gate_s: float = 10.0
 
+    def server_command(self) -> list[str]:
+        """The command line that starts the server with the whitelist applied.
+
+        Filtering on the client is not enough: the server would still expose
+        ``PowerShell`` and ``FileSystem``, and any client bug would turn the GUI
+        arm into a script arm.  ``--tools`` makes the server itself unable to
+        run a command, so the comparison stays honest.
+        """
+
+        command = list(self.command)
+        if "--tools" not in command:
+            command += ["--tools", ",".join(self.tools)]
+        if "--control-idle-timeout" not in command and self.idle_gate_s > 0:
+            command += ["--control-idle-timeout", str(self.idle_gate_s)]
+        return command
+
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "GuiConfig":
         raw = raw or {}
@@ -135,6 +153,30 @@ class GuiConfig:
             tools=tuple(raw.get("tools", GuiConfig().tools)),
             start_timeout_s=float(raw.get("start_timeout_s", 60.0)),
             idle_gate_s=float(raw.get("idle_gate_s", 10.0)),
+        )
+
+
+@dataclass(frozen=True)
+class OwnCliConfig:
+    """The project's own CLI, benchmarked on its own task suite.
+
+    ``template`` is a Hugo site skeleton copied into a throwaway sandbox per
+    task, so the CLI never touches the real blog checkout.
+    """
+
+    binary: str = "cli-anything-nizigen-blog"
+    template: str = ""
+    hugo: str = ""
+    home: str = ""
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any] | None) -> "OwnCliConfig":
+        raw = raw or {}
+        return cls(
+            binary=str(raw.get("binary", "cli-anything-nizigen-blog")),
+            template=str(raw.get("template", "")),
+            hugo=str(raw.get("hugo", "")),
+            home=str(raw.get("home", "")),
         )
 
 
@@ -161,8 +203,11 @@ class BenchConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     gui: GuiConfig = field(default_factory=GuiConfig)
+    owncli: OwnCliConfig = field(default_factory=OwnCliConfig)
     apps: AppConfig = field(default_factory=AppConfig)
-    repeats: dict[str, int] = field(default_factory=lambda: {"harness": 3, "script": 3, "gui": 1, "hybrid": 1})
+    repeats: dict[str, int] = field(
+        default_factory=lambda: {"harness": 3, "script": 3, "gui": 1, "hybrid": 1, "owncli": 3}
+    )
     runs_dir: str = "runs"
     download_cache: str = ".cache/osworld"
 
@@ -174,6 +219,7 @@ class BenchConfig:
             model=ModelConfig.from_dict(raw.get("model")),
             harness=HarnessConfig.from_dict(raw.get("harness")),
             gui=GuiConfig.from_dict(raw.get("gui")),
+            owncli=OwnCliConfig.from_dict(raw.get("owncli")),
             apps=AppConfig.from_dict(raw.get("apps")),
             repeats={**cls().repeats, **dict(raw.get("repeats", {}) or {})},
             runs_dir=str(raw.get("runs_dir", "runs")),

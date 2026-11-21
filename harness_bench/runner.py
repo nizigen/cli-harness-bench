@@ -102,7 +102,6 @@ class RunRecord:
 
 
 def classify_failure(
-    task: Task,
     outcome: AgentOutcome,
     grade_result: GradeResult,
     roundtrip_ok: bool | None,
@@ -120,6 +119,11 @@ def classify_failure(
 
     if grade_result.status != "graded":
         return "grader_unavailable", grade_result.reason
+
+    # A run that scored full marks did not fail, however many exploratory calls
+    # errored along the way; classifying it would inflate every failure table.
+    if grade_result.score >= 1.0:
+        return "", ""
 
     if outcome.declared_infeasible:
         return "declared_infeasible", outcome.summary[:400]
@@ -239,7 +243,7 @@ def run_once(
     record.finished_at = dt.datetime.now().isoformat(timespec="seconds")
     record.extra["per_metric"] = grade_result.per_metric
     record.failure_class, record.failure_note = classify_failure(
-        task, outcome, grade_result, roundtrip_ok
+        outcome, grade_result, roundtrip_ok
     )
 
     (run_dir / "record.json").write_text(

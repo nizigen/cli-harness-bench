@@ -340,6 +340,64 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# owncli
+# --------------------------------------------------------------------------
+
+
+def cmd_owncli(args: argparse.Namespace) -> int:
+    """Run our own CLI on our own tasks, through the same agent loop."""
+
+    from . import owncli as owncli_mod
+    from .owncli_run import run_batch
+
+    config = _config(args)
+    tasks = owncli_mod.load_tasks()
+    if args.task:
+        wanted = set(args.task)
+        tasks = [task for task in tasks if task.id in wanted]
+        missing = wanted - {task.id for task in tasks}
+        if missing:
+            raise SystemExit(f"unknown own-cli task(s): {', '.join(sorted(missing))}")
+    if not tasks:
+        print("no tasks selected")
+        return 1
+
+    coverage = owncli_mod.coverage()
+    print(
+        f"{len(tasks)} own-cli tasks, "
+        f"{coverage['expressible']}/{coverage['tasks']} expressible by the CLI today"
+    )
+
+    if args.dry_run:
+        for task in tasks:
+            print(f"  {task.id:<32} {'gap: ' + task.gap if task.gap else 'expressible'}")
+        return 0
+
+    if not config.model.model:
+        raise SystemExit(
+            "no model configured; set model.model in the config file or pass --model"
+        )
+
+    def on_record(record) -> None:
+        status = "ok" if record.score >= 1.0 else "fail"
+        print(
+            f"  {record.task_id:<32} r{record.repeat} {status} score={record.score:.2f} "
+            f"calls={record.tool_calls} tokens={record.prompt_tokens + record.completion_tokens} "
+            f"{record.failure_class}"
+        )
+
+    records = run_batch(
+        config,
+        tasks,
+        repeats=args.repeats,
+        runs_root=args.runs_dir,
+        on_record=on_record,
+    )
+    print(f"\n{len(records)} runs recorded under {args.runs_dir}")
+    return 0
+
+
 def _dry_run(config: BenchConfig, tasks, interfaces, split, runs_dir=None) -> int:
     """Materialize each task and grade its own standard answer.
 
@@ -566,6 +624,13 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--runs-dir", default=str(RUNS_ROOT))
     report.add_argument("--output", default=None)
     report.set_defaults(func=cmd_report)
+
+    own = sub.add_parser("owncli", help="run our own CLI-Anything harness on our own blog tasks")
+    own.add_argument("--task", nargs="*", default=None, help="only these task ids")
+    own.add_argument("--repeats", type=int, default=None)
+    own.add_argument("--runs-dir", default=str(RUNS_ROOT))
+    own.add_argument("--dry-run", action="store_true", help="list the tasks and their coverage gaps")
+    own.set_defaults(func=cmd_owncli)
 
     return parser
 

@@ -22,6 +22,7 @@ evaluator will read are on disk.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import pathlib
@@ -61,11 +62,16 @@ class ToolSpec:
 
 @dataclass
 class ToolOutcome:
-    """Result of executing one tool call."""
+    """Result of executing one tool call.
+
+    ``images`` carries raw PNG/JPEG bytes that came back from the tool (a GUI
+    screenshot, for instance).  Text-only interfaces leave it empty.
+    """
 
     content: str
     ok: bool = True
     meta: dict[str, Any] = field(default_factory=dict)
+    images: list[tuple[str, bytes]] = field(default_factory=list)
 
 
 class Interface(Protocol):
@@ -350,6 +356,40 @@ class ScriptInterface:
 # --------------------------------------------------------------------------
 
 
+class _LoopThread:
+    """One event loop, on its own thread, for the life of an MCP session.
+
+    An MCP stdio session is bound to the loop that opened it: its task group and
+    streams cannot be driven from a second ``anyio.run`` call.  Marshalling every
+    call into a single long-lived loop is what keeps the session usable across
+    many tool calls.
+    """
+
+    def __init__(self) -> None:
+        import asyncio
+        import threading
+
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._serve, daemon=True, name="gui-loop")
+        self._thread.start()
+
+    def _serve(self) -> None:
+        import asyncio
+
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def run(self, coro, timeout: float | None = None):
+        import asyncio
+
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
+    def close(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=15)
+        self._loop.close()
+
+
 class GuiInterface:
     """Screenshots and synthetic input through a Windows-MCP stdio server."""
 
@@ -362,6 +402,7 @@ class GuiInterface:
         self.calls: list[dict[str, Any]] = []
         self._session = None
         self._stack = None
+        self._loop: _LoopThread | None = None
         self._tools: dict[str, dict[str, Any]] = {}
 
     # -- MCP plumbing ----------------------------------------------------
@@ -376,41 +417,67 @@ class GuiInterface:
         except ImportError as exc:  # pragma: no cover - environment dependent
             raise ToolError(f"the mcp client library is required for the GUI interface: {exc}")
 
-        import anyio
+        command = self.gui.server_command()
 
         async def open_session():
             stack = AsyncExitStack()
-            params = StdioServerParameters(
-                command=self.gui.command[0],
-                args=list(self.gui.command[1:]),
-            )
+            params = StdioServerParameters(command=command[0], args=list(command[1:]))
             read, write = await stack.enter_async_context(stdio_client(params))
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
             listing = await session.list_tools()
-            allowed = {name: tool for name, tool in ((t.name, t) for t in listing.tools)
-                       if name in self.gui.tools}
+            allowed = {
+                name: tool
+                for name, tool in ((t.name, t) for t in listing.tools)
+                if name in self.gui.tools
+            }
             return stack, session, allowed
 
-        self._stack, self._session, self._tools = anyio.run(open_session)
+        self._loop = _LoopThread()
+        try:
+            self._stack, self._session, self._tools = self._loop.run(
+                open_session(), timeout=self.gui.start_timeout_s
+            )
+        except Exception as exc:
+            self._loop.close()
+            self._loop = None
+            raise ToolError(f"the GUI server did not start: {type(exc).__name__}: {exc}") from exc
 
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> ToolOutcome:
         self._ensure_session()
-        import anyio
+        assert self._loop is not None
 
         async def invoke():
             return await self._session.call_tool(name, arguments)
 
-        result = anyio.run(invoke)
+        result = self._loop.run(invoke())
         parts: list[str] = []
+        images: list[tuple[str, bytes]] = []
         for item in result.content:
             text = getattr(item, "text", None)
             if text:
                 parts.append(str(text))
-            else:
-                parts.append(f"<{getattr(item, 'type', 'content')}>")
+                continue
+            data = getattr(item, "data", None)
+            if data:
+                # A screenshot arrives as a base64 image block.  Dropping it
+                # would leave the model blind, so keep the bytes.
+                try:
+                    raw = base64.b64decode(data)
+                except (ValueError, TypeError):
+                    parts.append(f"<{getattr(item, 'type', 'content')}: undecodable>")
+                    continue
+                mime = str(getattr(item, "mimeType", "") or "image/png")
+                images.append((mime, raw))
+                parts.append(f"<image {mime}, {len(raw)} bytes>")
+                continue
+            parts.append(f"<{getattr(item, 'type', 'content')}>")
         body = "\n".join(parts) if parts else "(no content)"
-        return ToolOutcome(body[:8000], ok=not getattr(result, "isError", False))
+        return ToolOutcome(
+            body[:8000],
+            ok=not getattr(result, "isError", False),
+            images=images,
+        )
 
     # -- prompt and tools ------------------------------------------------
     def system_prompt(self, task: MaterializedTask) -> str:
@@ -466,17 +533,22 @@ class GuiInterface:
         return {"interface": self.name, "calls": self.calls}
 
     def close(self) -> None:
-        if self._stack is not None:
-            import anyio
+        if self._stack is None:
+            return
+        assert self._loop is not None
 
-            async def shutdown():
-                await self._stack.aclose()
+        async def shutdown():
+            await self._stack.aclose()
 
-            try:
-                anyio.run(shutdown)
-            finally:
-                self._stack = None
-                self._session = None
+        try:
+            self._loop.run(shutdown(), timeout=30)
+        except Exception:  # a broken session must not mask the run's result
+            pass
+        finally:
+            self._loop.close()
+            self._loop = None
+            self._stack = None
+            self._session = None
 
 
 # --------------------------------------------------------------------------

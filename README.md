@@ -16,10 +16,12 @@ harness_bench/          the runner
   osworld_bootstrap.py  import the vendored graders without their heavy deps
   normalize.py          recalculate spreadsheet caches before grading
   postconfig.py         replay the postconfig steps grading actually needs
-  interfaces.py         the four arms
+  interfaces.py         the four OSWorld arms
   agent.py              the tool-calling loop
   runner.py             one run = one directory of evidence
   roundtrip.py          the harness ceiling check
+  owncli.py             our own CLI's task set, sandbox and checks
+  owncli_run.py         the fifth arm: our own CLI, same loop and budget
   report.py             the tables
   cli.py                the command line
 configs/bench.yaml      the whole experiment in one file
@@ -27,6 +29,28 @@ configs/split.json      the frozen development/test split
 third_party/osworld/    the vendored tasks and graders (Apache-2.0)
 tests/                  the test suite
 ```
+
+## Two tracks
+
+The OSWorld track above answers the proposal's question about a *third-party*
+harness. It says nothing about whether the method transfers to a harness we
+write ourselves, so there is a second track on our own blog CLI:
+
+```
+python -m harness_bench owncli --dry-run   # the 12 tasks and their coverage gaps
+python -m harness_bench owncli             # drive the agent, then check the files
+```
+
+Same model, same budget, same record format, same report. The difference is that
+the checks read the site the CLI produced — front matter, `public/` output —
+never the CLI's own stdout, so a run cannot pass by describing what it would do.
+Each task gets a fresh git site repo, a pages repo and a private
+`NIZIGEN_BLOG_HOME`, so a run cannot touch the real blog checkouts.
+
+Twelve tasks, of which the CLI as it stands can express **8**; the four gaps
+(editing an existing post, deleting a post, backdating a post, editing the site
+title) are recorded as `expressiveness` rather than blamed on the agent.
+
 
 ## The task set
 
@@ -103,6 +127,7 @@ python -m harness_bench tasks --excluded       # the task set
 python -m harness_bench split                  # freeze the split
 python -m harness_bench roundtrip              # the ceiling check
 python -m harness_bench run --interface harness script --split-side dev
+python -m harness_bench owncli                 # our own CLI, our own tasks
 python -m harness_bench report                 # the tables
 ```
 
@@ -125,18 +150,27 @@ runs/<interface>/<task-id>/<timestamp>-r<n>/
 One YAML file pins the whole experiment:
 
 ```yaml
-model:    {base_url, model, api_key_env, vision, temperature, max_tokens, timeout_s}
+model:    {base_url, model, api_key_env, vision, image_history, temperature, max_tokens, timeout_s}
 budget:   {max_tool_calls: 50, timeout_s: 900}
 split:    {dev_fraction: 0.4, seed: 20260601}
 harness:  {libreoffice, gimp, skill_docs}
 gui:      {command, tools, start_timeout_s, idle_gate_s}
 apps:     {soffice, gimp}
-repeats:  {harness: 3, script: 3, gui: 1, hybrid: 1}
+owncli:   {binary, template, hugo, home}
+repeats:  {harness: 3, script: 3, gui: 1, hybrid: 1, owncli: 3}
 ```
 
-The GUI tool list is a whitelist. If a Windows-MCP server exposes `WriteFile` or
-`RunCommand`, the interface still refuses them, because an agent that can write a
-script is no longer a GUI agent.
+The GUI tool list is a whitelist enforced on **both** sides: the client refuses a
+tool that is not on it, and `GuiConfig.server_command()` passes it to the server
+as `--tools`, so the server never exposes `PowerShell`, `FileSystem`, `Scrape`,
+`Registry`, `Process` or `Clipboard` in the first place. An agent that can write
+a script is no longer a GUI agent.
+
+Screenshots are delivered to the model as `image_url` content parts, not as text
+placeholders; `model.image_history` keeps only the most recent ones attached and
+folds older ones to a one-line summary, so a long GUI run does not grow the
+prompt without bound. Full transcripts still keep everything.
+
 
 ## Requirements
 
@@ -190,10 +224,12 @@ LibreOffice and both harnesses available locally.
 
 | Check | Outcome |
 | --- | --- |
-| `pytest tests -q` | 96 passed |
+| `pytest tests -q` | 109 passed |
 | `run --dry-run` (all 133 tasks) | 107 self-graded, 94 score 1.0, 13 fail, 21 not gradeable |
 | `roundtrip` (all 133 tasks) | finished; **70 measured, 12 survived, 58 lost, ceiling 17.1%**. See `runs/roundtrip.json` |
 | `doctor` | soffice, `cli-anything-libreoffice`, `cli-anything-gimp`, 10 graders — all found |
+| GUI arm | `windows-mcp` starts in ~6 s; a `Screenshot` returns a real 2.9 MB PNG that reaches the model as an image part |
+| own-CLI arm | 12 blog tasks, 8 expressible; a scripted reference solution scores 8/8 on those and 0/4 on the gaps. Real model: `blog-01` 36 calls / 120k tokens / 1.00, `blog-02` 7 calls / 9.7k tokens / 1.00 |
 
 Ceiling-check tallies (every task imports and re-exports through LibreOffice,
 ~1–2 min each), out of the 133 adopted tasks:
