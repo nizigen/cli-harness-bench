@@ -158,3 +158,12 @@ def test_collect_result_paths_follows_every_result_config(tmp_path, stage_offlin
     # entries so a mismatch between them stays visible.
     assert len(paths) == 2
     assert all(path.name == "Novels_Intro_Packet.docx" for path in paths)
+
+
+def test_find_soffice_reports_a_configured_path_that_does_not_exist(tmp_path, monkeypatch):
+    """A stale `apps.soffice` must read as missing, not as configured."""
+
+    monkeypatch.setattr(normalize.shutil, "which", lambda name: None)
+    monkeypatch.setattr(normalize.os.environ, "get", lambda key, default=None: str(tmp_path))
+
+    assert normalize.find_soffice(str(tmp_path / "gone" / "soffice.com")) is None

@@ -26,6 +26,7 @@ from . import report as report_mod
 from . import roundtrip as roundtrip_mod
 from .config import DEFAULT_CONFIG_PATH, REPO_ROOT, BenchConfig
 from .grading import grade
+from .normalize import find_soffice
 from .runner import RUNS_ROOT, load_records, run_batch
 from .tasks import (
     Split,
@@ -104,8 +105,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"  getters/{module:<9} ok")
 
     print("\napplications")
-    soffice = shutil.which("soffice") or shutil.which("soffice.exe")
-    print(f"  soffice      {soffice or config.apps.soffice or 'NOT FOUND'}")
+    soffice = find_soffice(config.apps.soffice)
+    if soffice:
+        print(f"  soffice      {soffice}")
+    elif config.apps.soffice:
+        print(f"  soffice      NOT FOUND (configured as {config.apps.soffice})")
+    else:
+        print("  soffice      NOT FOUND")
     print(f"  harness lo   {shutil.which(config.harness.libreoffice) or 'NOT FOUND'}")
     print(f"  harness gimp {shutil.which(config.harness.gimp) or 'NOT FOUND'}")
 
@@ -341,7 +347,7 @@ def _dry_run(config: BenchConfig, tasks, interfaces, split, runs_dir=None) -> in
     download, the path rewriting, the normalisation and the grader all line up.
     """
 
-    from .normalize import find_soffice, save_outputs
+    from .normalize import save_outputs
     from .postconfig import run_postconfig
     from .tasks import _as_list, fetch
 
