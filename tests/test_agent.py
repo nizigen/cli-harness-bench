@@ -312,8 +312,91 @@ def test_older_screenshots_are_dropped_from_what_is_resent(materialized):
 
     tool_entries = [entry for entry in outcome.transcript if entry["role"] == "tool"]
     with_images = [entry for entry in tool_entries if isinstance(entry["content"], list)]
-    assert len(with_images) == 1
-    assert with_images[0]["content"][-1]["type"] == "image_url"
-    # The dropped ones keep their text, so the record still shows what happened.
-    assert tool_entries[0]["content"] == "captured"
+    assert len(with_images) == 3  # the audit keeps every image
+    request_tools = [e for e in client.requests[-1]["messages"] if e["role"] == "tool"]
+    request_images = [e for e in request_tools if isinstance(e["content"], list)]
+    assert len(request_images) == 1
+    assert request_images[0]["content"][-1]["type"] == "image_url"
+    assert request_tools[0]["content"] == "captured"
     assert outcome.images_sent == 3
+
+
+@pytest.mark.parametrize("arguments", ["{invalid", "[]", "null", '{"status":"mystery"}'])
+def test_invalid_finish_can_recover_without_declaring_completion(materialized, arguments):
+    interface = FakeInterface()
+    client = FakeClient([
+        _message(tool_calls=[_call("1", "finish", arguments)]),
+        _message(tool_calls=[_call("2", "finish", '{"status":"done"}')]),
+    ])
+    outcome = _runner(_config(), client, interface).run(materialized)
+    assert len(client.requests) == 2
+    assert not outcome.steps[0].tool_calls[0]["ok"]
+    assert outcome.status == "done"
+    assert len(interface.calls) == 1
+
+
+def test_rejected_finish_does_not_stop_the_agent(materialized):
+    class RejectFinish(FakeInterface):
+        def call(self, name, arguments):
+            return ToolOutcome("not accepted", ok=False)
+
+    client = FakeClient([
+        _message(tool_calls=[_call("1", "finish", '{"status":"done"}')]),
+        _message(content="cannot continue"),
+    ])
+    outcome = _runner(_config(), client, RejectFinish()).run(materialized)
+    assert outcome.status == "incomplete"
+    assert outcome.stopped_reason == "no_tool_call"
+
+
+def test_finish_ends_batch_before_later_mutations(materialized):
+    interface = FakeInterface()
+    client = FakeClient([_message(tool_calls=[
+        _call("1", "finish", '{"status":"done"}'),
+        _call("2", "run_harness", '{"command":"remove all"}'),
+    ])])
+    outcome = _runner(_config(), client, interface).run(materialized)
+    assert interface.calls == [("finish", {"status": "done"})]
+    assert outcome.tool_calls == 1
+
+
+@pytest.mark.parametrize("interface_name", ["gui", "hybrid"])
+def test_deadline_propagates_and_stops_batch_between_tools(materialized, monkeypatch, interface_name):
+    clock = [0.0]
+    monkeypatch.setattr(agent.time, "monotonic", lambda: clock[0])
+
+    class SlowInterface(FakeInterface):
+        name = interface_name
+
+        def call(self, name, arguments):
+            result = super().call(name, arguments)
+            clock[0] = self.deadline + 1
+            return result
+
+    interface = SlowInterface()
+    client = FakeClient([_message(tool_calls=[
+        _call("1", "run_harness", "{}"),
+        _call("2", "finish", '{"status":"done"}'),
+    ])])
+    outcome = _runner(_config(), client, interface).run(materialized)
+    assert interface.deadline > 0
+    assert outcome.stopped_reason == "wall_clock_budget"
+    assert outcome.status == "incomplete"
+    assert outcome.tool_calls == 1
+
+
+def test_model_timeout_at_run_deadline_is_budget_not_endpoint_failure(materialized, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(agent.time, "monotonic", lambda: clock[0])
+    config = BenchConfig.from_dict({"model": {"model": "test"}, "budget": {"timeout_s": 10}})
+    client = FakeClient([])
+
+    def expire(**kwargs):
+        assert kwargs["timeout"] == 10
+        clock[0] = 10
+        raise TimeoutError("request reached run deadline")
+
+    client.chat.completions.create = expire
+    outcome = _runner(config, client, FakeInterface()).run(materialized)
+    assert outcome.stopped_reason == "wall_clock_budget"
+    assert outcome.steps[0].error

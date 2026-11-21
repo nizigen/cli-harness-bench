@@ -9,6 +9,7 @@ inspection can tell an agent mistake from a harness defect.
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import time
 from dataclasses import dataclass, field
@@ -98,6 +99,8 @@ class AgentRunner:
         self.config = config
         self.interface = interface
         self.budget: Budget = config.budget
+        self.outcome = AgentOutcome()
+        self.on_step = None
 
     # -- client ----------------------------------------------------------
     def _client(self):
@@ -171,6 +174,10 @@ class AgentRunner:
                 "(an OpenAI-compatible endpoint is required)"
             )
 
+        started = time.monotonic()
+        deadline = started + self.budget.timeout_s
+        if getattr(self.interface, "name", "") in {"gui", "hybrid"}:
+            self.interface.deadline = deadline
         client = self._client()
         tools = [spec.as_openai() for spec in self.interface.tools()]
         messages: list[dict[str, Any]] = [
@@ -178,8 +185,12 @@ class AgentRunner:
             {"role": "user", "content": task.instruction},
         ]
 
-        outcome = AgentOutcome()
-        started = time.monotonic()
+        outcome = self.outcome = AgentOutcome(transcript=messages)
+
+        def checkpoint():
+            outcome.elapsed_s = time.monotonic() - started
+            if self.on_step is not None:
+                self.on_step(outcome)
 
         while True:
             if outcome.tool_calls >= self.budget.max_tool_calls:
@@ -189,20 +200,24 @@ class AgentRunner:
                 outcome.stopped_reason = "wall_clock_budget"
                 break
 
-            self._prune_images(messages)
+            request_messages = copy.deepcopy(messages)
+            self._prune_images(request_messages)
             step = Step(index=len(outcome.steps))
             try:
                 response = client.chat.completions.create(
                     model=model_cfg.model,
-                    messages=messages,
+                    messages=request_messages,
                     tools=tools,
+                    timeout=max(0.01, min(model_cfg.timeout_s, deadline - time.monotonic())),
                     temperature=model_cfg.temperature,
                     max_tokens=model_cfg.max_tokens,
                 )
             except Exception as exc:
                 step.error = f"{type(exc).__name__}: {exc}"
                 outcome.steps.append(step)
-                outcome.stopped_reason = "model_error"
+                outcome.stopped_reason = (
+                    "wall_clock_budget" if time.monotonic() >= deadline else "model_error"
+                )
                 break
 
             usage = getattr(response, "usage", None)
@@ -249,11 +264,19 @@ class AgentRunner:
                 if outcome.tool_calls >= self.budget.max_tool_calls:
                     budget_hit = True
                     break
+                if time.monotonic() >= deadline:
+                    outcome.stopped_reason = "wall_clock_budget"
+                    budget_hit = True
+                    break
                 outcome.tool_calls += 1
                 name = call.function.name
                 try:
                     arguments = json.loads(call.function.arguments or "{}")
-                except json.JSONDecodeError as exc:
+                    if not isinstance(arguments, dict):
+                        raise ValueError("tool arguments must be a JSON object")
+                    if name == FINISH_TOOL and arguments.get("status") not in {"done", "infeasible"}:
+                        raise ValueError("finish status must be done or infeasible")
+                except (json.JSONDecodeError, ValueError) as exc:
                     result_text = f"arguments were not valid JSON: {exc}"
                     ok = False
                     arguments = {}
@@ -282,20 +305,22 @@ class AgentRunner:
                 if images:
                     outcome.images_sent += len(images)
 
-                if name == FINISH_TOOL:
-                    outcome.status = str(arguments.get("status", "incomplete"))
+                if name == FINISH_TOOL and ok:
+                    outcome.status = str(arguments["status"])
                     outcome.summary = str(arguments.get("summary", ""))
                     finished = True
+                    break
 
             outcome.steps.append(step)
+            checkpoint()
             if finished:
                 outcome.stopped_reason = "finished"
                 break
             if budget_hit:
-                outcome.stopped_reason = "tool_call_budget"
+                outcome.stopped_reason = outcome.stopped_reason or "tool_call_budget"
                 break
 
-        self._prune_images(messages)
+        checkpoint()
         outcome.elapsed_s = time.monotonic() - started
         outcome.transcript = messages
         if not outcome.stopped_reason:

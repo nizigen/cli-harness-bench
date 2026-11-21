@@ -208,3 +208,170 @@ def test_tool_spec_renders_the_openai_shape():
     assert payload["type"] == "function"
     assert payload["function"]["name"] == "x"
     assert payload["function"]["parameters"]["type"] == "object"
+
+
+@pytest.fixture()
+def mcp_stub(tmp_path, monkeypatch):
+    """Use a real MCP subprocess and record transport ownership and exit."""
+    import asyncio
+    import sys
+    from contextlib import asynccontextmanager
+
+    stdio = pytest.importorskip("mcp.client.stdio")
+    script = tmp_path / "mcp_stub.py"
+    script.write_text(
+        "import asyncio\n"
+        "from mcp.server.fastmcp import FastMCP\n"
+        "server = FastMCP('test')\n"
+        "@server.tool()\n"
+        "async def Screenshot(delay: float = 0, fail: bool = False) -> str:\n"
+        "    await asyncio.sleep(delay)\n"
+        "    if fail: raise ValueError('stub tool failed')\n"
+        "    return 'stub screenshot'\n"
+        "server.run(transport='stdio')\n",
+        encoding="utf-8",
+    )
+    processes = []
+    lifecycle = []
+    create_process = stdio._create_platform_compatible_process
+    client = stdio.stdio_client
+
+    async def tracked_process(*args, **kwargs):
+        process = await create_process(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    @asynccontextmanager
+    async def tracked_client(*args, **kwargs):
+        owner = asyncio.current_task()
+        async with client(*args, **kwargs) as streams:
+            lifecycle.append("entered")
+            try:
+                yield streams
+            finally:
+                assert asyncio.current_task() is owner
+                lifecycle.append("exited")
+
+    monkeypatch.setattr(stdio, "_create_platform_compatible_process", tracked_process)
+    monkeypatch.setattr(stdio, "stdio_client", tracked_client)
+    config = BenchConfig.from_dict({
+        "gui": {"command": [sys.executable, str(script)], "tools": ["Screenshot"], "start_timeout_s": 15},
+        "budget": {"timeout_s": 2},
+    })
+    return config, processes, lifecycle
+
+
+def test_gui_real_mcp_reuses_session_and_exits_in_owner_task(calc_task, mcp_stub):
+    config, processes, lifecycle = mcp_stub
+    interface = interfaces.GuiInterface(config, calc_task)
+    try:
+        assert [tool.name for tool in interface.tools()] == ["Screenshot", "finish"]
+        thread = interface._loop._thread
+        assert interface.call("Screenshot", {}).content == "stub screenshot"
+        assert interface.call("Screenshot", {}).ok
+        assert len(processes) == 1
+    finally:
+        interface.close()
+    interface.close()
+    assert lifecycle == ["entered", "exited"]
+    assert processes[0].returncode is not None
+    assert not thread.is_alive()
+
+
+def test_gui_real_mcp_tool_timeout_closes_process(calc_task, mcp_stub):
+    import time
+
+    config, processes, lifecycle = mcp_stub
+    interface = interfaces.GuiInterface(config, calc_task)
+    interface.tools()
+    thread = interface._loop._thread
+    interface.deadline = time.monotonic() + 1
+    try:
+        with pytest.raises(interfaces.ToolError, match="Screenshot.*TimeoutError"):
+            interface.call("Screenshot", {"delay": 60})
+    finally:
+        interface.close()
+    assert lifecycle == ["entered", "exited"]
+    assert processes[0].returncode is not None
+    assert not thread.is_alive()
+
+
+def test_gui_real_mcp_startup_timeout_cleans_transport(calc_task, mcp_stub, monkeypatch):
+    import asyncio
+    from dataclasses import replace
+    from mcp import ClientSession
+
+    config, processes, lifecycle = mcp_stub
+    initialize = ClientSession.initialize
+
+    async def slow_initialize(self):
+        await asyncio.sleep(60)
+        return await initialize(self)
+
+    monkeypatch.setattr(ClientSession, "initialize", slow_initialize)
+    config = replace(config, gui=replace(config.gui, start_timeout_s=2))
+    interface = interfaces.GuiInterface(config, calc_task)
+    with pytest.raises(interfaces.ToolError, match="did not start.*TimeoutError"):
+        interface.tools()
+    interface.close()
+    assert lifecycle == ["entered", "exited"]
+    assert processes[0].returncode is not None
+    assert interface._loop is None
+
+
+def test_gui_call_timeout_is_capped_by_the_agent_deadline(calc_task, mcp_stub):
+    import time
+
+    config, _, _ = mcp_stub
+    interface = interfaces.GuiInterface(config, calc_task)
+    interface.deadline = time.monotonic() + 3
+    assert 2.9 < interface._call_timeout() <= 3
+    interface.deadline = time.monotonic() + 600
+    assert interface._call_timeout() == 60
+    interface.deadline = time.monotonic() - 1
+    assert interface._call_timeout() == 0.001
+    interface.clear_deadline()
+    assert interface.deadline is None
+
+
+def test_gui_mcp_transport_error_becomes_tool_error_and_cleans_up(calc_task, mcp_stub, monkeypatch):
+    from mcp import ClientSession
+
+    config, processes, lifecycle = mcp_stub
+    interface = interfaces.GuiInterface(config, calc_task)
+    interface.tools()
+    thread = interface._loop._thread
+
+    async def broken_call(self, name, arguments):
+        raise RuntimeError("broken MCP transport")
+
+    monkeypatch.setattr(ClientSession, "call_tool", broken_call)
+    with pytest.raises(interfaces.ToolError, match="broken MCP transport"):
+        interface.call("Screenshot", {})
+    interface.close()
+    assert lifecycle == ["entered", "exited"]
+    assert processes[0].returncode is not None
+    assert not thread.is_alive()
+
+
+def test_gui_missing_mcp_executable_leaves_no_loop(calc_task):
+    config = BenchConfig.from_dict({"gui": {"command": ["no-such-mcp-server-xyz"]}})
+    interface = interfaces.GuiInterface(config, calc_task)
+    with pytest.raises(interfaces.ToolError, match="did not start"):
+        interface.tools()
+    interface.close()
+    assert interface._loop is None
+
+
+def test_gui_real_mcp_tool_error_remains_visible(calc_task, mcp_stub):
+    config, processes, lifecycle = mcp_stub
+    interface = interfaces.GuiInterface(config, calc_task)
+    try:
+        outcome = interface.call("Screenshot", {"fail": True})
+        assert not outcome.ok
+        assert "stub tool failed" in outcome.content
+        assert interface.call("Screenshot", {}).ok
+    finally:
+        interface.close()
+    assert lifecycle == ["entered", "exited"]
+    assert processes[0].returncode is not None

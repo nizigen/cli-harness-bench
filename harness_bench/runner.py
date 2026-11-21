@@ -34,7 +34,7 @@ RUNS_ROOT = REPO_ROOT / "runs"
 
 
 def _timestamp() -> str:
-    return dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
 
 @dataclass
@@ -185,50 +185,105 @@ def run_once(
         started_at=started_at,
     )
 
-    materialized = materialize(task, workdir, config.download_cache)
-    soffice = find_soffice(config.apps.soffice)
-    record.extra["soffice"] = soffice
+    def persist(name, value):
+        target = run_dir / name
+        staging = target.with_suffix(target.suffix + ".tmp")
+        staging.write_text(json.dumps(value, indent=1, ensure_ascii=False), encoding="utf-8")
+        staging.replace(target)
 
-    interface = build_interface(interface_name, config, materialized)
+    record.status = "running"
+    record.extra.update({"model": config.model.model, "budget": {
+        "max_tool_calls": config.budget.max_tool_calls, "timeout_s": config.budget.timeout_s}})
+    persist("record.json", record.as_dict())
+    interface = desktop = runner = None
+    materialized = None
     outcome = AgentOutcome()
+    grade_result = GradeResult(0.0, "runner_error", "run did not reach grading", [])
+
+    def checkpoint(current):
+        persist("outcome.json", current.as_dict())
+        persist("transcript.json", current.transcript)
+
     try:
+        materialized = materialize(task, workdir, config.download_cache)
+        soffice = find_soffice(config.apps.soffice)
+        record.extra["soffice"] = soffice
+        import hashlib
+        record.extra["inputs"] = {
+            str(p.relative_to(workdir)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in workdir.rglob("*") if p.is_file()
+        }
+        interface = build_interface(interface_name, config, materialized)
+        if interface_name == "gui":
+            from .desktop import DesktopTask
+            desktop = DesktopTask(config, materialized, interface)
+            record.extra["desktop"] = desktop.prepare()
         runner = AgentRunner(config, interface)
+        runner.on_step = checkpoint
         outcome = runner.run(materialized)
-    except Exception as exc:
-        outcome.status = "error"
-        outcome.summary = f"{type(exc).__name__}: {exc}"
-        outcome.stopped_reason = "runner_error"
-    finally:
-        try:
-            record.extra["interface"] = interface.finalize(materialized)
-        except Exception as exc:  # finalize must never mask the real failure
-            record.extra["interface"] = {"error": f"{type(exc).__name__}: {exc}"}
-        interface.close()
-
-    (run_dir / "transcript.json").write_text(
-        json.dumps(outcome.transcript, indent=1, ensure_ascii=False), encoding="utf-8"
-    )
-
-    post = run_postconfig(materialized, soffice, run_dir / "normalize")
-    record.postconfig = post.as_dict()
-    (run_dir / "postconfig.json").write_text(
-        json.dumps(record.postconfig, indent=1, ensure_ascii=False), encoding="utf-8"
-    )
-
-    normalize_report = save_outputs(
-        collect_result_paths(materialized), soffice, run_dir / "normalize"
-    )
-    record.normalize = normalize_report.as_dict()
-    (run_dir / "normalize.json").write_text(
-        json.dumps(record.normalize, indent=1, ensure_ascii=False), encoding="utf-8"
-    )
-
-    if not post.ok:
-        grade_result = GradeResult(
-            0.0, "postconfig_failed", post.required_failure, []
+        if desktop is not None:
+            # Grading's declared Ctrl+S postconfig has its own bounded phase.
+            interface.clear_deadline()
+            save = desktop.finish()
+            record.extra["desktop"] = desktop.metadata
+            if not save["ok"]:
+                from .desktop import DesktopError
+                desktop.metadata["status"] = "save_failed"
+                raise DesktopError(f"GUI save failed: {save}", desktop.metadata)
+            desktop.close()
+            desktop = None
+        post = run_postconfig(materialized, soffice, run_dir / "normalize")
+        record.postconfig = post.as_dict()
+        persist("postconfig.json", record.postconfig)
+        normalize_report = save_outputs(
+            collect_result_paths(materialized), soffice, run_dir / "normalize"
         )
-    else:
-        grade_result = grade(materialized, outcome.action_history(), cache_root)
+        record.normalize = normalize_report.as_dict()
+        persist("normalize.json", record.normalize)
+        if not post.ok:
+            grade_result = GradeResult(0.0, "postconfig_failed", post.required_failure, [])
+        else:
+            grade_result = grade(materialized, outcome.action_history(), cache_root)
+        # Keep the exact scored artifacts even when disposable work is removed.
+        artifact_dir = run_dir / "artifacts"
+        for p in collect_result_paths(materialized):
+            p = pathlib.Path(p)
+            if p.is_file() and p.is_relative_to(workdir):
+                dest = artifact_dir / p.relative_to(workdir)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, dest)
+    except Exception as exc:
+        if runner is not None:
+            outcome = runner.outcome
+        message = f"{type(exc).__name__}: {exc}"
+        outcome.status = "error"
+        outcome.summary = message
+        outcome.stopped_reason = "runner_error"
+        grade_result = GradeResult(0.0, "runner_error", message, [])
+        metadata = getattr(exc, "metadata", None)
+        if metadata:
+            record.extra["desktop"] = metadata
+            if metadata.get("unsupported_setup"):
+                grade_result.status = "unsupported_setup"
+            elif metadata.get("status") == "save_failed":
+                grade_result.status = "save_failed"
+    finally:
+        if desktop is not None:
+            try:
+                desktop.close()
+            except Exception as exc:
+                record.extra["desktop_close_error"] = f"{type(exc).__name__}: {exc}"
+        if interface is not None:
+            try:
+                record.extra["interface"] = interface.finalize(materialized)
+            except Exception as exc:
+                record.extra["interface_finalize_error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                try:
+                    interface.close()
+                except Exception as exc:
+                    record.extra["interface_close_error"] = f"{type(exc).__name__}: {exc}"
+        checkpoint(outcome)
 
     record.status = outcome.status
     record.summary = outcome.summary
@@ -246,9 +301,7 @@ def run_once(
         outcome, grade_result, roundtrip_ok
     )
 
-    (run_dir / "record.json").write_text(
-        json.dumps(record.as_dict(), indent=1, ensure_ascii=False), encoding="utf-8"
-    )
+    persist("record.json", record.as_dict())
 
     if not keep_workdir:
         shutil.rmtree(workdir, ignore_errors=True)

@@ -66,7 +66,7 @@ def run_postconfig(
                     f"postconfig:{kind}",
                     "skip",
                     True,
-                    "GUI-only step; the runner saves outputs itself",
+                    "GUI-only step handled by desktop lifecycle for GUI runs; other interfaces must export their artifacts",
                 )
             )
             continue

@@ -1,5 +1,7 @@
 # Downloaded OSWorld inputs (re-fetchable, several hundred MB)
 .cache/
+# Version-pinned, document-free desktop profile templates.
+data/cache/
 
 # Run artifacts: every run writes a task sandbox here, plus screenshots and a
 # LibreOffice profile. All of it is regenerable, and the numbers that matter are

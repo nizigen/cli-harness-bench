@@ -22,13 +22,16 @@ evaluator will read are on disk.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import concurrent.futures
 import json
 import os
 import pathlib
 import shlex
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -411,12 +414,29 @@ class _LoopThread:
     def run(self, coro, timeout: float | None = None):
         import asyncio
 
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return future.result(timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise
 
     def close(self) -> None:
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join(timeout=15)
-        self._loop.close()
+        async def cancel_pending():
+            current = asyncio.current_task()
+            pending = [task for task in asyncio.all_tasks() if task is not current]
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        try:
+            self.run(cancel_pending(), timeout=30)
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(timeout=15)
+            if self._thread.is_alive():
+                raise ToolError("the GUI event loop did not stop")
+            self._loop.close()
 
 
 class GuiInterface:
@@ -429,57 +449,96 @@ class GuiInterface:
         self.gui: GuiConfig = config.gui
         self.task = task
         self.calls: list[dict[str, Any]] = []
-        self._session = None
-        self._stack = None
         self._loop: _LoopThread | None = None
-        self._tools: dict[str, dict[str, Any]] = {}
+        self._owner = None
+        self._requests = None
+        self._tools: dict[str, Any] = {}
+        # AgentRunner sets this immediately before an agent tool call and clears
+        # it afterwards.  ``None`` means a caller-owned operation (desktop setup
+        # or save) and still gets the hard 60 s cap, never the agent's budget.
+        self.deadline: float | None = None
+
+    def clear_deadline(self) -> None:
+        """Detach from the agent's wall clock before a setup/save operation."""
+        self.deadline = None
+
+    def _call_timeout(self) -> float:
+        now = time.monotonic()
+        deadline = self.deadline if self.deadline is not None else now + 60.0
+        return max(0.001, min(60.0, deadline - now))
 
     # -- MCP plumbing ----------------------------------------------------
-    def _ensure_session(self) -> None:
-        if self._session is not None:
-            return
+    async def _serve_session(self, ready: concurrent.futures.Future) -> None:
+        active = None
         try:
-            from contextlib import AsyncExitStack
-
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
-        except ImportError as exc:  # pragma: no cover - environment dependent
-            raise ToolError(f"the mcp client library is required for the GUI interface: {exc}")
 
-        command = self.gui.server_command()
-
-        async def open_session():
-            stack = AsyncExitStack()
+            command = self.gui.server_command()
             params = StdioServerParameters(command=command[0], args=list(command[1:]))
-            read, write = await stack.enter_async_context(stdio_client(params))
-            session = await stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            listing = await session.list_tools()
-            allowed = {
-                name: tool
-                for name, tool in ((t.name, t) for t in listing.tools)
-                if name in self.gui.tools
-            }
-            return stack, session, allowed
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    listing = await session.list_tools()
+                    self._requests = asyncio.Queue()
+                    ready.set_result({t.name: t for t in listing.tools if t.name in self.gui.tools})
+                    while True:
+                        request = await self._requests.get()
+                        if request is None:
+                            break
+                        name, arguments, timeout, active = request
+                        try:
+                            result = await asyncio.wait_for(
+                                session.call_tool(name, arguments), timeout=timeout
+                            )
+                        except Exception as exc:
+                            if not active.done():
+                                active.set_exception(exc)
+                        else:
+                            if not active.done():
+                                active.set_result(result)
+                        active = None
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            if active is not None and not active.done():
+                active.set_exception(ToolError(f"GUI session stopped: {type(exc).__name__}: {exc}"))
+            raise
 
+    def _ensure_session(self) -> None:
+        if self._owner is not None:
+            if self._owner.done():
+                raise ToolError("the GUI session has stopped; close it before reconnecting")
+            return
         self._loop = _LoopThread()
+        ready = concurrent.futures.Future()
+        self._owner = asyncio.run_coroutine_threadsafe(self._serve_session(ready), self._loop._loop)
         try:
-            self._stack, self._session, self._tools = self._loop.run(
-                open_session(), timeout=self.gui.start_timeout_s
-            )
-        except Exception as exc:
-            self._loop.close()
-            self._loop = None
+            self._tools = ready.result(timeout=self.gui.start_timeout_s)
+        except BaseException as exc:
+            try:
+                self.close()
+            except ToolError as cleanup:
+                raise ToolError(f"the GUI server did not start: {exc}; cleanup failed: {cleanup}") from exc
             raise ToolError(f"the GUI server did not start: {type(exc).__name__}: {exc}") from exc
 
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> ToolOutcome:
         self._ensure_session()
         assert self._loop is not None
-
-        async def invoke():
-            return await self._session.call_tool(name, arguments)
-
-        result = self._loop.run(invoke())
+        response = concurrent.futures.Future()
+        timeout = self._call_timeout()
+        self._loop._loop.call_soon_threadsafe(
+            self._requests.put_nowait, (name, arguments, timeout, response)
+        )
+        try:
+            result = response.result(timeout=timeout)
+        except Exception as exc:
+            self._owner.cancel()
+            try:
+                self.close()
+            except ToolError as cleanup:
+                raise ToolError(f"GUI tool {name!r} failed: {exc}; cleanup failed: {cleanup}") from exc
+            raise ToolError(f"GUI tool {name!r} failed: {type(exc).__name__}: {exc}") from exc
         parts: list[str] = []
         images: list[tuple[str, bytes]] = []
         for item in result.content:
@@ -563,22 +622,32 @@ class GuiInterface:
         return {"interface": self.name, "calls": self.calls}
 
     def close(self) -> None:
-        if self._stack is None:
+        if self._loop is None:
             return
-        assert self._loop is not None
-
-        async def shutdown():
-            await self._stack.aclose()
-
+        loop, owner = self._loop, self._owner
+        error = None
         try:
-            self._loop.run(shutdown(), timeout=30)
-        except Exception:  # a broken session must not mask the run's result
-            pass
+            if self._requests is not None and not owner.done():
+                loop._loop.call_soon_threadsafe(self._requests.put_nowait, None)
+            else:
+                owner.cancel()
+            try:
+                owner.result(timeout=30)
+            except concurrent.futures.CancelledError:
+                pass
+            except Exception as exc:
+                error = exc
         finally:
-            self._loop.close()
+            try:
+                loop.close()
+            except Exception as exc:
+                error = error or exc
             self._loop = None
-            self._stack = None
-            self._session = None
+            self._owner = None
+            self._requests = None
+            self._tools = {}
+        if error is not None:
+            raise ToolError(f"the GUI session did not close cleanly: {type(error).__name__}: {error}") from error
 
 
 # --------------------------------------------------------------------------
@@ -595,6 +664,17 @@ class HybridInterface:
         self.harness = HarnessInterface(config, task)
         self.gui = GuiInterface(config, task)
         self.task = task
+
+    @property
+    def deadline(self) -> float | None:
+        return self.gui.deadline
+
+    @deadline.setter
+    def deadline(self, value: float | None) -> None:
+        self.gui.deadline = value
+
+    def clear_deadline(self) -> None:
+        self.gui.clear_deadline()
 
     def system_prompt(self, task: MaterializedTask) -> str:
         return (
