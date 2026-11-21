@@ -64,7 +64,7 @@ reach. `auto/deepseek-v4.1-flash`, 50 tool calls, one run each.
 | edit a post's title (`blog-09-edit-title`) | **1.00** — 9 calls, 13k tokens, 17 s | 0.50 — 50 calls, 1.0M tokens, 8 screenshots | not applicable |
 | set the whole document to Times New Roman (`0e763496`) | not applicable | **1.00** — 50 calls, 707k tokens, 22 screenshots | 0.00 — 50 calls, 164k tokens |
 
-Both results follow the same mechanism rather than model luck:
+The traces suggest the following explanations; one run per task cannot establish a general advantage:
 
 - The LibreOffice harness *has* the verb — `style create` plus `style apply
   <name> <index>` — but it applies to one content index at a time. Fifteen
@@ -77,8 +77,7 @@ Both results follow the same mechanism rather than model luck:
   still read `title: "Welcome"`; one CLI command does it. Precise text editing
   is where coordinate clicks lose.
 
-The GUI arm's token cost is dominated by screenshots: each is ~1.4 MB, and even
-with `image_history: 2` a 50-call run reaches a million prompt tokens.
+The GUI runs report substantially higher cumulative API token usage. Screenshots and repeated UI-tree context both contribute; PNG byte size is not a token count or a billing estimate.
 
 
 ## The task set
@@ -247,9 +246,7 @@ offline.
 
 ## Status of this machine
 
-Nothing here is a result: the experiment has not been run. What has been
-verified is that the pipeline is wired correctly, on a machine that now has
-LibreOffice and both harnesses available locally.
+The full preregistered experiment has not been run. The results below are engineering checks and exploratory single-run comparisons, not a population-level estimate. Earlier writer smoke runs include 51/52-call budget violations and are excluded from strict comparisons; the paired runs use the corrected 50-call limit.
 
 | Check | Outcome |
 | --- | --- |
@@ -259,7 +256,7 @@ LibreOffice and both harnesses available locally.
 | `doctor` | soffice, `cli-anything-libreoffice`, `cli-anything-gimp`, 10 graders — all found |
 | GUI arm | `windows-mcp` starts in ~6 s; a `Screenshot` returns a real 1.4–2.9 MB PNG that reaches the model as an image part |
 | own-CLI arm | 12 blog tasks, 12 expressible; a scripted reference solution scores 12/12. Real model: **12/12 at 1.00**, 292 calls / 1.08M tokens / 954 s total |
-| third-party harness arm | writer dev set, 50-call budget: **1 of 8** reaches 1.00; the other 7 stop at `tool_call_budget` because the writer verbs have no batch semantics |
+| third-party harness arm | writer dev set, 50-call budget: **1 of 8** reaches 1.00; the other 7 stop at `tool_call_budget` in these exploratory runs; the font-task trace shows repeated per-paragraph style application |
 
 Ceiling-check tallies (every task imports and re-exports through LibreOffice,
 ~1–2 min each), out of the 133 adopted tasks:
@@ -280,7 +277,7 @@ Three references are rendered artifacts (two PDFs, one PNG): there is no
 editable document to import, so a round trip says nothing about the harness.
 They are counted as `rendered_artifacts`, not as losses.
 
-Every loss was traced to a concrete mechanism, not to grader noise: charts
+Inspected examples reveal concrete mechanisms: charts
 dropped on export, `0.00%` number formats degraded to `General`, formulas
 written as `=of:=B2-C2-…` so the recalculation yields `#VALUE!`; on impress the
 import/export model keeps only text boxes, so every shape and group is lost
