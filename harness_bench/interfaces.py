@@ -90,6 +90,33 @@ class Interface(Protocol):
     def close(self) -> None: ...
 
 
+def _workspace_listing(task: MaterializedTask, limit: int = 40) -> str:
+    """Name the files already sitting in the task directory.
+
+    On OSWorld's desktop the input files are visible; here the agent only has
+    the instruction, so an instruction like "add page numbers" would leave it
+    guessing the file name. Listing the directory restores that context without
+    telling the agent anything about the answer.
+    """
+    workdir = pathlib.Path(task.workdir)
+    if not workdir.exists():
+        return ""
+    names: list[str] = []
+    for path in sorted(workdir.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(workdir).as_posix()
+        if relative.startswith("_") or "/_" in relative:
+            continue
+        names.append(relative)
+        if len(names) >= limit:
+            break
+    if not names:
+        return ""
+    listing = "\n".join(f"- {name}" for name in names)
+    return f"\nThe directory already contains these files:\n{listing}\n"
+
+
 def _kill_tree(process: subprocess.Popen) -> None:
     """Stop a child and every process it started (LibreOffice leaves one)."""
 
@@ -180,7 +207,8 @@ class HarnessInterface:
         skill_block = f"\n\nDocumentation for the CLI:\n{skill}\n" if skill else ""
         return (
             "You are an automation agent working on a Windows desktop machine.\n"
-            f"The task refers to files inside this directory: {task.workdir}\n\n"
+            f"The task refers to files inside this directory: {task.workdir}\n"
+            f"{_workspace_listing(task)}\n"
             f"You may only use the command line tool `{self.binary}`. "
             "Run it with `--help` (and `--json` for machine-readable output) to "
             "discover its subcommands. You cannot use a shell, Python, or the GUI.\n"
@@ -273,7 +301,8 @@ class ScriptInterface:
     def system_prompt(self, task: MaterializedTask) -> str:
         return (
             "You are an automation agent working on a Windows desktop machine.\n"
-            f"The task refers to files inside this directory: {task.workdir}\n\n"
+            f"The task refers to files inside this directory: {task.workdir}\n"
+            f"{_workspace_listing(task)}\n"
             "You may use a shell and Python. Available libraries include openpyxl, "
             "python-pptx, python-docx, Pillow, lxml, pandas and pdfplumber.\n"
             f"{SCRIPT_SOFFICE_HINT}\n"
@@ -484,7 +513,8 @@ class GuiInterface:
         allowed = ", ".join(self.gui.tools)
         return (
             "You are a computer-use agent driving a real Windows desktop.\n"
-            f"The task refers to files inside this directory: {task.workdir}\n\n"
+            f"The task refers to files inside this directory: {task.workdir}\n"
+            f"{_workspace_listing(task)}\n"
             f"You may only use these GUI tools: {allowed}. "
             "Take a screenshot first, then act on what you see. "
             "You cannot use a shell, Python, or any application CLI.\n"

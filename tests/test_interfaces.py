@@ -53,6 +53,8 @@ def test_harness_prompt_names_the_working_directory_and_forbids_other_channels(c
     assert str(calc_task.workdir) in prompt
     assert "cli-anything-libreoffice" in prompt
     assert "cannot use a shell" in prompt
+    for local in calc_task.vm_to_local.values():
+        assert str(local.relative_to(calc_task.workdir).as_posix()) in prompt
 
 
 def test_harness_skill_documentation_is_injected_when_configured(calc_task):

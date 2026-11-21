@@ -13,9 +13,11 @@ the CLI's own output, so a run cannot pass by describing what it would do.
 from __future__ import annotations
 
 import dataclasses
+import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 from typing import Any, Callable
 
@@ -100,12 +102,26 @@ def _git_init(path: pathlib.Path) -> None:
     run("commit", "-q", "-m", "bench: initial state", "--allow-empty")
 
 
+def _force_remove(path: pathlib.Path) -> None:
+    """Delete a sandbox tree even when git made its objects read-only.
+
+    A sandbox is created and thrown away on every run, so a second run over the
+    same directory must not die on a read-only pack file.
+    """
+
+    def on_error(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    if path.exists():
+        shutil.rmtree(path, onexc=on_error)
+
+
 def make_sandbox(task: "OwnTask", workdir: pathlib.Path, config: Any) -> Sandbox:
     """Build the site, pages repo and private CLI home for one task."""
 
     workdir = pathlib.Path(workdir).resolve()
-    if workdir.exists():
-        shutil.rmtree(workdir)
+    _force_remove(workdir)
     site = workdir / "site"
     pages = workdir / "pages"
     home = workdir / "cli-home"
@@ -396,14 +412,13 @@ TASKS: tuple[OwnTask, ...] = (
         instruction="Change the title of the existing post content/post/welcome.md to 'Welcome Back'.",
         checks=(
             Check("front_matter", {"path": "content/post/welcome.md", "field": "title", "equals": "Welcome Back"}),
+            Check("body_contains", {"path": "content/post/welcome.md", "text": "The first post."}),
         ),
-        gap="the CLI can create and list posts but has no command that edits an existing post",
     ),
     OwnTask(
         id="blog-10-delete-post",
         instruction="Delete the post content/post/obsolete.md.",
         checks=(Check("file_missing", {"path": "content/post/obsolete.md"}),),
-        gap="the CLI has no delete command; removing a post means editing the repository by hand",
     ),
     OwnTask(
         id="blog-11-backdate-post",
@@ -412,13 +427,14 @@ TASKS: tuple[OwnTask, ...] = (
             Check("front_matter", {"path": "content/post/backdated.md", "field": "title", "equals": "Backdated"}),
             Check("front_matter", {"path": "content/post/backdated.md", "field": "date", "equals": "2020-01-02"}),
         ),
-        gap="`post new` always stamps today's date and has no --date option",
     ),
     OwnTask(
         id="blog-12-site-title",
-        instruction="Change the site title in hugo.toml to 'Bench Notes'.",
-        checks=(Check("text_contains", {"path": "hugo.toml", "text": "Bench Notes"}),),
-        gap="`config set` only knows the CLI's own five keys, not the site configuration",
+        instruction="Change the site title in hugo.toml to 'Bench Notes' without disturbing the rest of the file.",
+        checks=(
+            Check("text_contains", {"path": "hugo.toml", "text": "title = 'Bench Notes'"}),
+            Check("text_contains", {"path": "hugo.toml", "text": "[markup.goldmark.renderer]"}),
+        ),
     ),
 )
 

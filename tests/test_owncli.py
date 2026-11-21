@@ -7,6 +7,7 @@ output) and that a task the CLI cannot express is counted as such.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 import subprocess
 
@@ -113,17 +114,12 @@ def test_a_clean_build_scores_one(tmp_path, config):
     assert owncli.grade(sandbox.task, sandbox).score == 1.0
 
 
-def test_coverage_names_the_tasks_the_cli_cannot_express():
+def test_coverage_reports_every_task_as_expressible():
     coverage = owncli.coverage()
 
     assert coverage["tasks"] == 12
-    assert coverage["expressible"] == 8
-    assert set(coverage["gaps"]) == {
-        "blog-09-edit-title",
-        "blog-10-delete-post",
-        "blog-11-backdate-post",
-        "blog-12-site-title",
-    }
+    assert coverage["expressible"] == 12
+    assert coverage["gaps"] == {}
 
 
 def test_every_task_has_checks_and_an_instruction():
@@ -140,7 +136,10 @@ def test_a_task_with_a_gap_is_recorded_as_expressiveness(tmp_path, config, monke
     from harness_bench import owncli_run
     from harness_bench.agent import AgentOutcome
 
-    task = owncli.by_id("blog-10-delete-post")
+    task = dataclasses.replace(
+        owncli.by_id("blog-10-delete-post"),
+        gap="this CLI has no delete command",
+    )
 
     class FakeRunner:
         def __init__(self, *args, **kwargs):

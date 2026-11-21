@@ -47,9 +47,38 @@ never the CLI's own stdout, so a run cannot pass by describing what it would do.
 Each task gets a fresh git site repo, a pages repo and a private
 `NIZIGEN_BLOG_HOME`, so a run cannot touch the real blog checkouts.
 
-Twelve tasks, of which the CLI as it stands can express **8**; the four gaps
-(editing an existing post, deleting a post, backdating a post, editing the site
-title) are recorded as `expressiveness` rather than blamed on the agent.
+Twelve tasks. When the track was written the CLI could express only **8** of
+them; the four gaps (editing an existing post, deleting a post, backdating a
+post, editing the site title) were recorded as `expressiveness` rather than
+blamed on the agent, and closing them is what `post show/edit/delete`,
+`post new --date` and `site show/set` exist for. With those commands in place
+all **12** are expressible and a scripted reference solution scores 12/12.
+
+## CLI against GUI
+
+The same model, budget and record format, on tasks each interface can actually
+reach. `auto/deepseek-v4.1-flash`, 50 tool calls, one run each.
+
+| task | own CLI | GUI | third-party harness |
+| --- | --- | --- | --- |
+| edit a post's title (`blog-09-edit-title`) | **1.00** — 9 calls, 13k tokens, 17 s | 0.50 — 50 calls, 1.0M tokens, 8 screenshots | not applicable |
+| set the whole document to Times New Roman (`0e763496`) | not applicable | **1.00** — 50 calls, 707k tokens, 22 screenshots | 0.00 — 50 calls, 164k tokens |
+
+Both results follow the same mechanism rather than model luck:
+
+- The LibreOffice harness *has* the verb — `style create` plus `style apply
+  <name> <index>` — but it applies to one content index at a time. Fifteen
+  paragraphs used up the whole budget; `document json` already showed
+  `font_name: "Times New Roman"` when the run stopped, with no export step left.
+  The GUI selects everything and sets the font once, so it wins on **batch
+  semantics**.
+- Editing one line of YAML front matter is the reverse. The GUI spent 50 calls
+  on Ctrl+H, double clicks, `Home`/`Shift+End` and two undo presses and the file
+  still read `title: "Welcome"`; one CLI command does it. Precise text editing
+  is where coordinate clicks lose.
+
+The GUI arm's token cost is dominated by screenshots: each is ~1.4 MB, and even
+with `image_history: 2` a 50-call run reaches a million prompt tokens.
 
 
 ## The task set
@@ -224,12 +253,13 @@ LibreOffice and both harnesses available locally.
 
 | Check | Outcome |
 | --- | --- |
-| `pytest tests -q` | 109 passed |
+| `pytest tests -q` | 113 passed |
 | `run --dry-run` (all 133 tasks) | 107 self-graded, 94 score 1.0, 13 fail, 21 not gradeable |
 | `roundtrip` (all 133 tasks) | finished; **70 measured, 12 survived, 58 lost, ceiling 17.1%**. See `runs/roundtrip.json` |
 | `doctor` | soffice, `cli-anything-libreoffice`, `cli-anything-gimp`, 10 graders — all found |
-| GUI arm | `windows-mcp` starts in ~6 s; a `Screenshot` returns a real 2.9 MB PNG that reaches the model as an image part |
-| own-CLI arm | 12 blog tasks, 8 expressible; a scripted reference solution scores 8/8 on those and 0/4 on the gaps. Real model: `blog-01` 36 calls / 120k tokens / 1.00, `blog-02` 7 calls / 9.7k tokens / 1.00 |
+| GUI arm | `windows-mcp` starts in ~6 s; a `Screenshot` returns a real 1.4–2.9 MB PNG that reaches the model as an image part |
+| own-CLI arm | 12 blog tasks, 12 expressible; a scripted reference solution scores 12/12. Real model: **12/12 at 1.00**, 292 calls / 1.08M tokens / 954 s total |
+| third-party harness arm | writer dev set, 50-call budget: **1 of 8** reaches 1.00; the other 7 stop at `tool_call_budget` because the writer verbs have no batch semantics |
 
 Ceiling-check tallies (every task imports and re-exports through LibreOffice,
 ~1–2 min each), out of the 133 adopted tasks:

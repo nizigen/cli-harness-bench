@@ -158,6 +158,40 @@ def test_the_tool_call_budget_stops_the_loop(materialized):
     assert outcome.tool_calls == 2
 
 
+@pytest.mark.parametrize("batch_sizes, limit", [([60], 50), ([49, 4], 50), ([3], 2)])
+def test_tool_call_budget_is_enforced_inside_each_batch(materialized, batch_sizes, limit):
+    config = BenchConfig.from_dict(
+        {"model": {"model": "test-model"}, "budget": {"max_tool_calls": limit}}
+    )
+    interface = FakeInterface()
+    client = FakeClient([
+        _message(tool_calls=[_call(f"{batch}-{i}", "run_harness", "{}") for i in range(size)])
+        for batch, size in enumerate(batch_sizes)
+    ])
+
+    outcome = _runner(config, client, interface).run(materialized)
+
+    assert outcome.tool_calls == len(interface.calls) == limit
+    assert sum(len(step.tool_calls) for step in outcome.steps) == limit
+    assert outcome.stopped_reason == "tool_call_budget"
+    assert len(client.requests) == len(batch_sizes)
+
+
+def test_finish_beyond_budget_cannot_declare_success(materialized):
+    config = BenchConfig.from_dict(
+        {"model": {"model": "test-model"}, "budget": {"max_tool_calls": 1}}
+    )
+    interface = FakeInterface()
+    client = FakeClient([_message(tool_calls=[
+        _call("1", "run_harness", "{}"),
+        _call("2", "finish", '{"status": "done"}'),
+    ])])
+    outcome = _runner(config, client, interface).run(materialized)
+    assert outcome.tool_calls == len(interface.calls) == 1
+    assert outcome.status == "incomplete"
+    assert outcome.stopped_reason == "tool_call_budget"
+
+
 def test_a_model_error_is_recorded_not_raised(materialized):
     interface = FakeInterface()
     client = FakeClient([RuntimeError("upstream exploded")])

@@ -117,6 +117,7 @@ class AgentRunner:
             base_url=model.base_url,
             api_key=model.resolved_api_key() or "not-needed",
             timeout=model.timeout_s,
+            max_retries=0,
             http_client=http_client,
         )
 
@@ -240,7 +241,14 @@ class AgentRunner:
                 break
 
             finished = False
+            budget_hit = False
             for call in calls:
+                # The budget is per run, not per turn: a single response may ask
+                # for more calls than are left, so it has to be checked here and
+                # not only at the top of the loop.
+                if outcome.tool_calls >= self.budget.max_tool_calls:
+                    budget_hit = True
+                    break
                 outcome.tool_calls += 1
                 name = call.function.name
                 try:
@@ -282,6 +290,9 @@ class AgentRunner:
             outcome.steps.append(step)
             if finished:
                 outcome.stopped_reason = "finished"
+                break
+            if budget_hit:
+                outcome.stopped_reason = "tool_call_budget"
                 break
 
         self._prune_images(messages)

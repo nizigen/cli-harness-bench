@@ -171,7 +171,7 @@ def run_once(
     """Materialize the task, drive the agent, then grade what it produced."""
 
     started_at = dt.datetime.now().isoformat(timespec="seconds")
-    run_dir = pathlib.Path(runs_root) / interface_name / task.id / f"{_timestamp()}-r{repeat}"
+    run_dir = pathlib.Path(runs_root).resolve() / interface_name / task.id / f"{_timestamp()}-r{repeat}"
     run_dir.mkdir(parents=True, exist_ok=True)
     workdir = run_dir / "work"
     cache_root = run_dir / "grade-cache"
