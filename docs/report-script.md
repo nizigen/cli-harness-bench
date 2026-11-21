@@ -103,7 +103,7 @@ OSWorld 的判分函数跑在 Linux 虚拟机里，我们要它在 Windows 上�
   `transcript.json` 记完整轨迹，`postconfig.json` 记哪些判分前置步骤跑了、哪些跳了；
 - `report` 出主结果表、失败分类表、McNemar 配对检验和 refine 曲线。
 
-**95 个测试全绿**，`run --dry-run` 不用花一个 token 就能验证
+**96 个测试全绿**，`run --dry-run` 不用花一个 token 就能验证
 「下载→路径改写→重算→判分」这条链是通的。
 
 四种接口也都接好了：harness 只能调 CLI，脚本臂有 shell 和 Python，GUI 臂走

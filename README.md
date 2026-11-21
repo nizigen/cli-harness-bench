@@ -190,7 +190,7 @@ LibreOffice and both harnesses available locally.
 
 | Check | Outcome |
 | --- | --- |
-| `pytest tests -q` | 95 passed |
+| `pytest tests -q` | 96 passed |
 | `run --dry-run` (all 133 tasks) | 107 self-graded, 94 score 1.0, 13 fail, 21 not gradeable |
 | `roundtrip` (all 133 tasks) | finished; **70 measured, 12 survived, 58 lost, ceiling 17.1%**. See `runs/roundtrip.json` |
 | `doctor` | soffice, `cli-anything-libreoffice`, `cli-anything-gimp`, 10 graders — all found |
