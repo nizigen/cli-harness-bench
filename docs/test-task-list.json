@@ -1,0 +1,109 @@
+{
+  "selection_date": "2026-11-22",
+  "status": "selected_not_started",
+  "selection_rule": "First three per app in original seed=20260601 pilot order",
+  "model": "auto/deepseek-v4.1-flash",
+  "budget": {
+    "max_tool_calls": 200,
+    "timeout_s": 3600
+  },
+  "budget_note": "Deviates from the proposal initial 50 calls / 900 s; both arms identical; records from the earlier 50-call batch must not be pooled with this batch",
+  "tasks": [
+    "01b269ae-2111-4a07-81fd-3fcd711993b0",
+    "0bf05a7d-b28b-44d2-955a-50b41e24012a",
+    "21ab7b40-77c2-4ae6-8321-e00d3a086c73",
+    "0810415c-bde4-4443-9047-d5f70165a697",
+    "0b17a146-2934-46c7-8727-73ff6b6483e8",
+    "936321ce-5236-426a-9a20-e0e3c5dc536f",
+    "4ed5abd0-8b5d-47bd-839f-cacfa15ca37a",
+    "ac1b39ff-ee4d-4483-abce-c117e98942f0",
+    "ac9bb6cb-1888-43ab-81e4-a98a547918cd"
+  ],
+  "details": [
+    {
+      "id": "01b269ae-2111-4a07-81fd-3fcd711993b0",
+      "app": "libreoffice_calc",
+      "instruction": "Fill all the blank cells in B1:E30 with the value in the cell above it. Finish the work and don't touch irrelevant regions, even if they are blank.",
+      "metrics": [
+        "compare_table"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_calc/01b269ae-2111-4a07-81fd-3fcd711993b0.json"
+    },
+    {
+      "id": "0bf05a7d-b28b-44d2-955a-50b41e24012a",
+      "app": "libreoffice_calc",
+      "instruction": "I would like to copy all the numbers in the 'Old ID' column to the 'New 7 Digit Id' column, and pad them with zeros in front, to fill them up to seven digits. Finish the work and don't touch irrelevant regions, even if they are blank.",
+      "metrics": [
+        "compare_table"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_calc/0bf05a7d-b28b-44d2-955a-50b41e24012a.json"
+    },
+    {
+      "id": "21ab7b40-77c2-4ae6-8321-e00d3a086c73",
+      "app": "libreoffice_calc",
+      "instruction": "Please calculate the period rate for my data in a new column with header \"Period Rate (%)\", convert the results as number type, and highlight the highest result with green (#00ff00) font.",
+      "metrics": [
+        "compare_table"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_calc/21ab7b40-77c2-4ae6-8321-e00d3a086c73.json"
+    },
+    {
+      "id": "0810415c-bde4-4443-9047-d5f70165a697",
+      "app": "libreoffice_writer",
+      "instruction": "Make the line spacing of first two paragraph into double line spacing",
+      "metrics": [
+        "compare_line_spacing",
+        "compare_line_spacing"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_writer/0810415c-bde4-4443-9047-d5f70165a697.json"
+    },
+    {
+      "id": "0b17a146-2934-46c7-8727-73ff6b6483e8",
+      "app": "libreoffice_writer",
+      "instruction": "Help me change the 2 in \"H2O\" to a subscript.",
+      "metrics": [
+        "compare_docx_files",
+        "compare_subscript_contains"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_writer/0b17a146-2934-46c7-8727-73ff6b6483e8.json"
+    },
+    {
+      "id": "936321ce-5236-426a-9a20-e0e3c5dc536f",
+      "app": "libreoffice_writer",
+      "instruction": "Could you help me convert the text seperated by commas to a table?",
+      "metrics": [
+        "compare_docx_tables",
+        "compare_docx_tables"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_writer/936321ce-5236-426a-9a20-e0e3c5dc536f.json"
+    },
+    {
+      "id": "4ed5abd0-8b5d-47bd-839f-cacfa15ca37a",
+      "app": "libreoffice_impress",
+      "instruction": "Set the color of titles in slides 2,3,5 as black and underline them.",
+      "metrics": [
+        "compare_pptx_files_robust",
+        "compare_pptx_files_robust"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_impress/4ed5abd0-8b5d-47bd-839f-cacfa15ca37a.json"
+    },
+    {
+      "id": "ac1b39ff-ee4d-4483-abce-c117e98942f0",
+      "app": "libreoffice_impress",
+      "instruction": "Move the table on Page 3 to the bottom of the slide.",
+      "metrics": [
+        "compare_pptx_files"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_impress/ac1b39ff-ee4d-4483-abce-c117e98942f0.json"
+    },
+    {
+      "id": "ac9bb6cb-1888-43ab-81e4-a98a547918cd",
+      "app": "libreoffice_impress",
+      "instruction": "I am preparing a PPT in Libreoffice impress. The slide number is barely visible to me. Please help me change the color of the slide number to red?",
+      "metrics": [
+        "check_page_number_colors"
+      ],
+      "source": "third_party/osworld/evaluation_examples/examples/libreoffice_impress/ac9bb6cb-1888-43ab-81e4-a98a547918cd.json"
+    }
+  ]
+}
